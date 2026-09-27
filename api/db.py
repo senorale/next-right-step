@@ -179,6 +179,85 @@ def get_tuition_medians() -> list[dict]:
         return [dict(r._mapping) for r in rows]
 
 
+def _safe_float(val) -> float | None:
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def search_occupations(keyword: str) -> dict:
+    """Search occupations by keyword via O*NET API. Returns matched occupations
+    with bright outlook status, education requirements, and BLS salary when available."""
+    if not ONET_API_KEY:
+        return {"error": "O*NET API key not configured", "results": []}
+
+    try:
+        resp = requests.get(f"{ONET_BASE_URL}/online/search", params={
+            "keyword": keyword,
+            "start": 1,
+            "end": 10,
+        }, headers={
+            "X-API-Key": ONET_API_KEY,
+            "Accept": "application/json",
+            "User-Agent": "should-i-go/1.0",
+        }, timeout=10)
+    except requests.RequestException:
+        logger.exception("O*NET search failed for '%s'", keyword)
+        return {"error": "O*NET search request failed", "results": []}
+
+    if resp.status_code != 200:
+        logger.warning("O*NET search returned %d for '%s'", resp.status_code, keyword)
+        return {"error": f"O*NET search returned {resp.status_code}", "results": []}
+
+    data = resp.json()
+    raw_occupations = data.get("occupation", [])
+    if not raw_occupations:
+        return {"results": [], "keyword": keyword}
+
+    soc_codes = list({occ["code"].split(".")[0] for occ in raw_occupations})
+
+    bls_data: dict = {}
+    if soc_codes:
+        try:
+            codes_params = {f"c{i}": code for i, code in enumerate(soc_codes)}
+            codes_sql = ", ".join(f":c{i}" for i in range(len(soc_codes)))
+            with _connect_with_retry() as conn:
+                rows = conn.execute(
+                    text(f'SELECT occupation_code, name, annual_salary, typical_years_of_school FROM "OccupationSubCategory" WHERE occupation_code IN ({codes_sql})'),
+                    codes_params,
+                )
+                bls_data = {r.occupation_code: dict(r._mapping) for r in rows}
+        except Exception:
+            logger.exception("BLS cross-reference failed")
+
+    results = []
+    fallback_count = 0
+    for occ in raw_occupations[:10]:
+        code = occ["code"]
+        short_code = code.split(".")[0]
+        tags = occ.get("tags", {})
+        bls = bls_data.get(short_code, {})
+
+        years = bls.get("typical_years_of_school")
+        if years is None and fallback_count < 3:
+            years = _fetch_typical_years(short_code)
+            fallback_count += 1
+
+        results.append({
+            "soc_code": short_code,
+            "onet_code": code,
+            "title": occ.get("title", ""),
+            "bright_outlook": tags.get("bright_outlook", False),
+            "annual_salary": _safe_float(bls.get("annual_salary")),
+            "typical_years_of_school": _safe_float(years),
+        })
+
+    return {"results": results, "keyword": keyword}
+
+
 _SCHOOL_FIELDS = ",".join([
     "id",
     "school.name",

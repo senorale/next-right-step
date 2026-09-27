@@ -27,6 +27,7 @@ from db import (
     run_sql,
     search_schools,
     get_school_programs,
+    search_occupations,
 )
 
 logger = logging.getLogger(__name__)
@@ -211,6 +212,20 @@ TOOLS = [
         },
     },
     {
+        "name": "search_occupations",
+        "description": "Search occupations by keyword via O*NET. Returns up to 10 matched occupations with SOC code, bright outlook status, typical education years, and BLS annual salary when available. Use this when the user names a career or occupation to match it to real SOC codes and pull education/salary data.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": "Occupation or career keyword to search (e.g. 'pharmacist', 'electrician', 'software developer')",
+                }
+            },
+            "required": ["keyword"],
+        },
+    },
+    {
         "name": "run_sql",
         "description": """Run a read-only SQL SELECT query against the database. Only SELECT statements are allowed. Results are capped at 50 rows.
 
@@ -245,6 +260,7 @@ Database schema (PostgreSQL, all table/column names are double-quoted):
 
 _TOOL_PROGRESS = {
     "find_majors": ("Searching majors…", "Found matching majors"),
+    "search_occupations": ("Searching occupations…", "Found matching occupations"),
     "search_schools": ("Looking up schools…", "Found schools"),
     "get_school_programs": ("Pulling program earnings…", "Got program data"),
     "get_tuition_medians": ("Getting tuition data…", "Got tuition data"),
@@ -253,6 +269,7 @@ _TOOL_PROGRESS = {
 
 TOOL_DISPATCH = {
     "find_majors": lambda args: find_majors_with_occupations(args["query"]),
+    "search_occupations": lambda args: search_occupations(args["keyword"]),
     "get_tuition_medians": lambda _args: get_tuition_medians(),
     "search_schools": lambda args: search_schools(
         args.get("name"), args.get("state"), args.get("ownership"),
