@@ -265,6 +265,7 @@ _SCHOOL_FIELDS = ",".join([
     "school.state",
     "school.school_url",
     "school.ownership",
+    "latest.student.size",
     "latest.cost.tuition.in_state",
     "latest.cost.tuition.out_of_state",
     "latest.cost.avg_net_price.overall",
@@ -275,7 +276,11 @@ _SCHOOL_FIELDS = ",".join([
     "latest.cost.net_price.consumer.by_income_level.110001-plus",
     "latest.completion.rate_suppressed.overall",
     "latest.aid.median_debt_suppressed.overall",
+    "latest.earnings.6_yrs_after_entry.median",
     "latest.earnings.10_yrs_after_entry.median",
+    "latest.admissions.admission_rate.overall",
+    "latest.student.retention_rate.four_year.full_time",
+    "latest.repayment.3_yr_repayment.overall",
 ])
 
 _OWNERSHIP_LABELS = {1: "Public", 2: "Private nonprofit", 3: "Private for-profit"}
@@ -286,6 +291,13 @@ _OWNERSHIP_FILTER = {
     "private": 2,
 }
 
+_DEGREE_TYPE_FILTER = {
+    "certificate": 1,
+    "associate": 2,
+    "bachelor": 3,
+    "graduate": 4,
+}
+
 
 def search_schools(
     name: str | None = None,
@@ -294,6 +306,7 @@ def search_schools(
     max_net_price: int | None = None,
     size: str | None = None,
     sort_by: str | None = None,
+    degree_type: str | None = "bachelor",
 ) -> dict:
     """Search schools by name and/or state via College Scorecard API. Supports
     filtering by ownership (public/private), max net price, and sorting by
@@ -325,6 +338,8 @@ def search_schools(
         params["latest.student.size__range"] = "5000..15000"
     elif size == "large":
         params["latest.student.size__range"] = "15000.."
+    if degree_type and degree_type.lower() in _DEGREE_TYPE_FILTER:
+        params["school.degrees_awarded.predominant"] = _DEGREE_TYPE_FILTER[degree_type.lower()]
 
     sort_key = sort_by or ""
 
@@ -352,6 +367,7 @@ def search_schools(
             "state": r.get("school.state"),
             "url": r.get("school.school_url"),
             "type": _OWNERSHIP_LABELS.get(r.get("school.ownership"), "Unknown"),
+            "student_size": r.get("latest.student.size"),
             "tuition_in_state": r.get("latest.cost.tuition.in_state"),
             "tuition_out_of_state": r.get("latest.cost.tuition.out_of_state"),
             "avg_net_price": avg_net_price,
@@ -364,9 +380,13 @@ def search_schools(
             },
             "graduation_rate": grad_rate,
             "median_debt": median_debt,
+            "earnings_6yr_after_entry": r.get("latest.earnings.6_yrs_after_entry.median"),
             "earnings_10yr_after_entry": earnings,
+            "admission_rate": r.get("latest.admissions.admission_rate.overall"),
+            "retention_rate": r.get("latest.student.retention_rate.four_year.full_time"),
+            "loan_repayment_rate_3yr": r.get("latest.repayment.3_yr_repayment.overall"),
         })
-        if len(schools) >= 10:
+        if len(schools) >= 5:
             break
 
     sort_field_map = {
@@ -374,6 +394,9 @@ def search_schools(
         "graduation_rate": ("graduation_rate", True),
         "net_price": ("avg_net_price", False),
         "median_debt": ("median_debt", False),
+        "admission_rate": ("admission_rate", False),
+        "retention_rate": ("retention_rate", True),
+        "loan_repayment": ("loan_repayment_rate_3yr", True),
     }
     if sort_key in sort_field_map:
         field, descending = sort_field_map[sort_key]

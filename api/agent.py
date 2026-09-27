@@ -158,7 +158,7 @@ TOOLS = [
     },
     {
         "name": "search_schools",
-        "description": "Search colleges by name, state, or both. Returns up to 10 matches (graduation rate >= 70%) with real tuition, net price by income bracket, graduation rate, median debt, and earnings. Use when a user names a specific school, wants to compare schools, or explore schools in a state. Use the filter and sort params based on the user's stated preferences from intake.",
+        "description": "Search colleges by name, state, or both. Returns up to 5 matches (graduation rate >= 70%) with tuition, net price by income, graduation rate, median debt, earnings, admission rate, retention rate, and loan repayment. Defaults to bachelor's-degree-granting schools. Use filter and sort params based on user's intake preferences.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -186,8 +186,13 @@ TOOLS = [
                 },
                 "sort_by": {
                     "type": "string",
-                    "enum": ["earnings", "graduation_rate", "net_price", "median_debt"],
-                    "description": "How to rank results. earnings=highest first, graduation_rate=highest first, net_price=lowest first, median_debt=lowest first.",
+                    "enum": ["earnings", "graduation_rate", "net_price", "median_debt", "admission_rate", "retention_rate", "loan_repayment"],
+                    "description": "How to rank results. earnings=highest first, graduation_rate=highest first, retention_rate=highest first, loan_repayment=highest first, net_price=lowest first, median_debt=lowest first, admission_rate=lowest first.",
+                },
+                "degree_type": {
+                    "type": "string",
+                    "enum": ["certificate", "associate", "bachelor", "graduate"],
+                    "description": "Filter by predominant degree awarded. Defaults to 'bachelor'. Use 'certificate' or 'associate' for trade/vocational schools. Omit or pass null for no filter.",
                 },
             },
             "required": [],
@@ -274,6 +279,7 @@ TOOL_DISPATCH = {
     "search_schools": lambda args: search_schools(
         args.get("name"), args.get("state"), args.get("ownership"),
         args.get("max_net_price"), args.get("size"), args.get("sort_by"),
+        args.get("degree_type", "bachelor"),
     ),
     "get_school_programs": lambda args: get_school_programs(args["school_id"], args.get("major_search")),
     "run_sql": lambda args: run_sql(args["query"]),
