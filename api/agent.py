@@ -22,7 +22,6 @@ load_dotenv(dotenv_path="../.env")
 
 import anthropic
 from db import (
-    find_majors_with_occupations,
     get_tuition_medians,
     run_sql,
     search_schools,
@@ -133,20 +132,6 @@ def _retry_delay_for(exc: Exception) -> float:
 # arguments.
 
 TOOLS = [
-    {
-        "name": "find_majors",
-        "description": "Search college majors by name and get all linked occupations with annual salaries and relevance scores in one call. Each result includes a major_id (UUID) you can use to build comparison links. Relevance: 1.0 = direct pipeline, 0.7 = common path, 0.4 = possible path. Salary data is from BLS May 2024. BLS caps reported salaries at $239,200/yr.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Partial or full major name to search for (e.g. 'computer', 'nursing', 'engineering')",
-                }
-            },
-            "required": ["query"],
-        },
-    },
     {
         "name": "get_tuition_medians",
         "description": "Get national median annual tuition costs by school type (public in-state, public out-of-state, private nonprofit). Includes sticker price, net price after aid, and full cost of attendance. Use this for general cost comparisons when no specific school is named.",
@@ -264,7 +249,6 @@ Database schema (PostgreSQL, all table/column names are double-quoted):
 ]
 
 _TOOL_PROGRESS = {
-    "find_majors": ("Searching majors…", "Found matching majors"),
     "search_occupations": ("Searching occupations…", "Found matching occupations"),
     "search_schools": ("Looking up schools…", "Found schools"),
     "get_school_programs": ("Pulling program earnings…", "Got program data"),
@@ -273,7 +257,6 @@ _TOOL_PROGRESS = {
 }
 
 TOOL_DISPATCH = {
-    "find_majors": lambda args: find_majors_with_occupations(args["query"]),
     "search_occupations": lambda args: search_occupations(args["keyword"]),
     "get_tuition_medians": lambda _args: get_tuition_medians(),
     "search_schools": lambda args: search_schools(
@@ -289,12 +272,11 @@ SYSTEM_PROMPT = """You are a data-gathering agent for the "Should I Go?" college
 
 TOOLS:
 
-1. find_majors(query) - Search majors by name. Returns linked occupations with BLS salaries, relevance scores, and major_id.
-2. search_occupations(keyword) - Search occupations by keyword via O*NET. Returns SOC codes, bright outlook, education years, BLS salary. Use when user names a career/occupation.
-3. get_tuition_medians() - National median tuition by school type (public in-state, out-of-state, private).
-4. search_schools(name, state, ownership, max_net_price, size, sort_by) - Search schools with filters. Returns graduation rate, earnings, debt, admission rate, retention rate, loan repayment. Only schools with graduation rate >= 70%.
-5. get_school_programs(school_id, major_search?) - Per-program earnings at a specific school. Requires school_id from search_schools.
-6. run_sql(query) - Read-only SQL for analytical questions the other tools can't answer.
+1. search_occupations(keyword) - Search occupations by keyword via O*NET. Returns SOC codes, bright outlook, education years, BLS salary. Use when user names a career, occupation, OR major/field of study (e.g. "computer science" returns related occupations like Software Developers).
+2. get_tuition_medians() - National median tuition by school type (public in-state, out-of-state, private).
+3. search_schools(name, state, ownership, max_net_price, size, sort_by) - Search schools with filters. Returns graduation rate, earnings, debt, admission rate, retention rate, loan repayment. Only schools with graduation rate >= 70%.
+4. get_school_programs(school_id, major_search?) - Per-program earnings at a specific school. Requires school_id from search_schools.
+5. run_sql(query) - Read-only SQL for analytical questions the other tools can't answer.
 
 The user's intake_answers include a "path_type" field (one of: path1, path2, path3, path4, path5). Gather data based on their path:
 
@@ -316,15 +298,14 @@ path3 - COMPARING PROGRAMS AT A SCHOOL:
 User is at or committed to a specific school, comparing programs.
 - search_schools for their school (to get school_id)
 - get_school_programs for their school, filtered by each program/major they named
-- find_majors for each program (for BLS national salary context)
-- search_occupations for occupations linked to their programs (for bright outlook, education data)
+- search_occupations for occupations linked to their programs (for bright outlook, education data, BLS salary)
 
 path4 - COMPARE CAREER TRACKS:
 User wants to compare 2+ career paths side by side. Check current_position and current_field for their starting point.
 - search_occupations for EACH career they named
 - If user is working: search_occupations for their current role (for baseline comparison)
 - get_tuition_medians for cost baseline (education paths may require degrees)
-- find_majors for fields related to each career
+- search_occupations for related occupations in each field
 
 path5 - PATH TO A SPECIFIC CAREER:
 User has a target occupation and needs the roadmap from current position.
@@ -336,9 +317,9 @@ User has a target occupation and needs the roadmap from current position.
 RULES:
 
 - Call ALL relevant tools for the user's path in the first turn. Gather broadly.
-- When a user mentions a major, call find_majors. When they name a school, call search_schools. When they name a career, call search_occupations.
+- When a user mentions a major or career, call search_occupations. When they name a school, call search_schools.
 - To get program earnings, call search_schools first (for school_id), then get_school_programs.
-- If search_occupations or find_majors returns no results, try broader/alternative keywords.
+- If search_occupations returns no results, try broader/alternative keywords.
 - BLS caps reported salaries at $239,200/yr.
 
 RESPONSE:
