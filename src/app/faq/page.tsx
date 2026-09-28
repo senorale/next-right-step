@@ -76,6 +76,20 @@ const faqs: { q: string; a: ReactNode }[] = [
     ),
   },
   {
+    q: 'How do you estimate debt for careers that need a graduate degree?',
+    a: (
+      <>
+        College Scorecard reports debt per credential, so a law or medical degree&apos;s
+        median debt only covers money borrowed for that degree. Nobody gets there without a
+        bachelor&apos;s first, so for careers that typically need a master&apos;s, doctoral, or
+        professional degree we add the national median bachelor&apos;s debt on top. We use
+        the national figure (weighted by how many schools report each field) because the
+        bachelor&apos;s before a graduate program can be in any field. Your own undergraduate
+        debt may be higher or lower.
+      </>
+    ),
+  },
+  {
     q: "What's the difference between sticker price and net price?",
     a: (
       <>
