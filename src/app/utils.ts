@@ -71,4 +71,17 @@ export function calculatePayoffYears(
   return totalCost / salaryDelta;
 }
 
+/** Fixed monthly payment that amortizes a loan over its term. */
+export function calculateMonthlyPayment(
+  principal: number,
+  annualInterestRate: number,
+  termYears: number
+): number {
+  if (!(principal > 0) || !(termYears > 0)) return 0;
+  const months = termYears * 12;
+  if (!(annualInterestRate > 0)) return principal / months;
+  const r = annualInterestRate / 100 / 12;
+  return (principal * r * Math.pow(1 + r, months)) / (Math.pow(1 + r, months) - 1);
+}
+
   
