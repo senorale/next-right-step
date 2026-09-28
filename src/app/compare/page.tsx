@@ -16,7 +16,7 @@ const DEFAULT_TERM = 20
 
 interface OccupationLink {
   relevance: number
-  occupation: { id: string; name: string; annual_salary: number }
+  occupation: { id: string; name: string; annual_salary: number; typical_years_of_school: number | null }
 }
 
 interface Major {
@@ -36,6 +36,15 @@ function weightedSalary(occupations: OccupationLink[]) {
   return Math.round(
     occupations.reduce((s, o) => s + o.occupation.annual_salary * o.relevance, 0) / totalWeight
   )
+}
+
+function weightedYears(occupations: OccupationLink[]) {
+  if (occupations.length === 0) return 4
+  const totalWeight = occupations.reduce((s, o) => s + o.relevance, 0)
+  const avg = occupations.reduce(
+    (s, o) => s + (o.occupation.typical_years_of_school ?? 4) * o.relevance, 0
+  ) / totalWeight
+  return Math.round(avg * 10) / 10
 }
 
 function useDebouncedCallback<T extends (...args: never[]) => void>(
@@ -186,6 +195,7 @@ function CompareContent() {
       ? {
           major: { id: selectedMajor.id, name: selectedMajor.name },
           weightedSalary: weightedSalary(selectedMajor.occupations),
+          weightedYears: weightedYears(selectedMajor.occupations),
           tuition: tuitionDefaults,
         }
       : null

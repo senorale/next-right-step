@@ -6,7 +6,6 @@ import * as CollegeConstants from '@/app/constants/college_related_constants'
 import { InfoTooltip } from '../calculator/InfoTooltip'
 import { Slider } from '@/components/ui/slider'
 
-const YEARS = parseFloat(CollegeConstants.BACHELOR_YEARS_IN_SCHOOL)
 const HS_SALARY = CollegeConstants.HIGHSCHOOL_DIPLOMA_MEDIAN_SALARY
 
 const fmt = (n: number) => `$${Math.round(n).toLocaleString()}`
@@ -26,6 +25,7 @@ function SchoolColumn({
   salary,
   interestRate,
   termYears,
+  schoolYears,
 }: {
   label: string
   annualTuition: number
@@ -33,16 +33,17 @@ function SchoolColumn({
   salary: number
   interestRate: number
   termYears: number
+  schoolYears: number
 }) {
   const totals = useMemo(() => {
-    const tuition = annualTuition * YEARS
+    const tuition = annualTuition * schoolYears
     const interest = calculateTotalInterestPaid(tuition, interestRate, termYears)
-    const opportunity = HS_SALARY * YEARS
+    const opportunity = HS_SALARY * schoolYears
     const total = tuition + interest + opportunity
     const breakEven = calculateBreakEvenYears(total, salary, HS_SALARY)
     const monthly = monthlyPayment(tuition, interestRate, termYears)
     return { tuition, interest, opportunity, total, breakEven, monthly }
-  }, [annualTuition, salary, interestRate, termYears])
+  }, [annualTuition, salary, interestRate, termYears, schoolYears])
 
   return (
     <div className="flex-1 space-y-4">
@@ -63,7 +64,7 @@ function SchoolColumn({
       </div>
 
       <div className="space-y-2 text-center">
-        <Stat label="Tuition (4 yr)" value={fmt(totals.tuition)} />
+        <Stat label={`Tuition (${schoolYears} yr)`} value={fmt(totals.tuition)} />
         <Stat label="Monthly payment" value={fmt(totals.monthly)} />
         <Stat label="Total interest" value={fmt(totals.interest)} />
         <Stat label="Opportunity cost" value={fmt(totals.opportunity)} />
@@ -99,6 +100,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 export interface ComparisonData {
   major: { id: string; name: string }
   weightedSalary: number
+  weightedYears: number
   tuition: {
     publicInState: number
     privateNonprofit: number
@@ -185,6 +187,7 @@ export default function DegreePayoffComparison({
           salary={params.salary}
           interestRate={params.interestRate}
           termYears={params.termYears}
+          schoolYears={data.weightedYears}
         />
         <div className="w-px bg-border" />
         <SchoolColumn
@@ -194,12 +197,13 @@ export default function DegreePayoffComparison({
           salary={params.salary}
           interestRate={params.interestRate}
           termYears={params.termYears}
+          schoolYears={data.weightedYears}
         />
       </div>
 
       <p className="text-xs text-muted-foreground text-center">
         Tuition: College Scorecard median net price. Salary: BLS May 2024.
-        Opportunity cost: {fmt(HS_SALARY)}/yr foregone earnings over {YEARS} years.
+        Opportunity cost: {fmt(HS_SALARY)}/yr foregone earnings over {data.weightedYears} years.
       </p>
     </div>
   )
