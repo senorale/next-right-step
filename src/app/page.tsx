@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { Compass, Bot } from 'lucide-react'
+import { Compass, Mountain } from 'lucide-react'
 
 export default function LandingPage() {
   return (
@@ -7,36 +7,36 @@ export default function LandingPage() {
       <div className="w-full max-w-xl space-y-10 text-center">
         <div className="space-y-3">
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-balance">
-            Should I go to college?
+            Find your next right step
           </h1>
           <p className="text-muted-foreground text-lg">
-            Choose how you want to explore the answer.
+            College, trades, or a new career. How do you want to find your way?
           </p>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
+          <Link
+            href="/chat"
+            className="group flex flex-col items-center gap-4 rounded-xl border-2 border-border p-8 transition-all hover:border-primary hover:shadow-md"
+          >
+            <Mountain className="h-10 w-10 text-muted-foreground group-hover:text-primary transition-colors" />
+            <div className="space-y-1">
+              <span className="text-lg font-semibold">Guided hike</span>
+              <p className="text-sm text-muted-foreground">
+                Tell our AI counselor about your situation and get a personalized report.
+              </p>
+            </div>
+          </Link>
+
           <Link
             href="/explore"
             className="group flex flex-col items-center gap-4 rounded-xl border-2 border-border p-8 transition-all hover:border-primary hover:shadow-md"
           >
             <Compass className="h-10 w-10 text-muted-foreground group-hover:text-primary transition-colors" />
             <div className="space-y-1">
-              <span className="text-lg font-semibold">Explore on my own</span>
+              <span className="text-lg font-semibold">Compass</span>
               <p className="text-sm text-muted-foreground">
-                Browse majors, compare salaries, and run the payoff calculator at your own pace.
-              </p>
-            </div>
-          </Link>
-
-          <Link
-            href="/chat"
-            className="group flex flex-col items-center gap-4 rounded-xl border-2 border-border p-8 transition-all hover:border-primary hover:shadow-md"
-          >
-            <Bot className="h-10 w-10 text-muted-foreground group-hover:text-primary transition-colors" />
-            <div className="space-y-1">
-              <span className="text-lg font-semibold">Counselor Agent</span>
-              <p className="text-sm text-muted-foreground">
-                Tell our AI counselor about your situation and get personalized guidance.
+                Explore on your own. Compare schools, programs, and careers at your own pace.
               </p>
             </div>
           </Link>

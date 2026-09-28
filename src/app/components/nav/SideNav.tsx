@@ -12,12 +12,14 @@ import {
   PanelLeftOpen,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { PATHS } from '../paths/paths'
 
 const links = [
-  { href: '/', label: 'Home', icon: Home },
-  { href: '/chat', label: 'Counselor Agent', icon: Bot },
-  { href: '/explore', label: 'Explore', icon: Compass },
-  { href: '/faq', label: 'FAQ', icon: HelpCircle },
+  { href: '/', label: 'Home', icon: Home, sub: false },
+  { href: '/explore', label: 'Explore paths', icon: Compass, sub: false },
+  ...PATHS.map((p) => ({ href: p.href, label: p.title, icon: p.icon, sub: true })),
+  { href: '/chat', label: 'Counselor Agent', icon: Bot, sub: false },
+  { href: '/faq', label: 'FAQ', icon: HelpCircle, sub: false },
 ]
 
 export default function SideNav() {
@@ -45,8 +47,8 @@ export default function SideNav() {
         </button>
 
         <nav className="mt-2 flex flex-col gap-1">
-          {links.map(({ href, label, icon: Icon }) => {
-            const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
+          {links.map(({ href, label, icon: Icon, sub }) => {
+            const active = href === '/' || href === '/explore' ? pathname === href : pathname.startsWith(href)
             return (
               <Link
                 key={href}
@@ -54,6 +56,7 @@ export default function SideNav() {
                 title={label}
                 className={cn(
                   'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                  sub && !collapsed && 'ml-4',
                   active
                     ? 'bg-primary text-primary-foreground'
                     : 'text-foreground hover:bg-accent'
