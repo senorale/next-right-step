@@ -9,7 +9,8 @@
     "lint": "next lint",
     "create-db": "ts-node scripts/create-entries-from-csv.ts",
     "create-29": "ts-node scripts/create-29-records.ts",
-    "seed-tuition": "TS_NODE_COMPILER_OPTIONS='{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' ts-node --transpile-only scripts/seed-tuition-medians.ts"
+    "seed-tuition": "TS_NODE_COMPILER_OPTIONS='{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' ts-node --transpile-only scripts/seed-tuition-medians.ts",
+    "seed-schools": "TS_NODE_COMPILER_OPTIONS='{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' ts-node --transpile-only scripts/seed-schools.ts"
   },
   "dependencies": {
     "@next/third-parties": "^16.3.1",
