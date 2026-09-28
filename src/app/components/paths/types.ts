@@ -58,6 +58,8 @@ export interface SchoolProgram {
   earnings_1yr: number | null
   earnings_4yr: number | null
   median_debt: number | null
+  /** ProgramDebt for the same field and credential, all schools */
+  national_median_debt: number | null
   occupations: { id: string; name: string; annual_salary: number }[]
 }
 

@@ -39,7 +39,8 @@ export async function GET(_request: NextRequest, ctx: RouteContext<'/api/schools
       return NextResponse.json({ error: 'School not found' }, { status: 404 })
     }
 
-    // National salary for each program's degree field, via the CIP-SOC crosswalk.
+    // National salary for each program's degree field, via the CIP-SOC crosswalk,
+    // and national median debt as a fallback when the school reports none.
     const cips = await prisma.cipCode.findMany({
       where: { code: { in: [...new Set(programs.map((p) => p.cip_code))] } },
       select: {
@@ -47,8 +48,15 @@ export async function GET(_request: NextRequest, ctx: RouteContext<'/api/schools
         occupations: {
           select: { occupation: { select: { id: true, name: true, annual_salary: true } } },
         },
+        debt: {
+          where: { school_type: 'all' },
+          select: { credential_level: true, median_debt: true },
+        },
       },
     })
+    const nationalDebt = new Map(
+      cips.flatMap((c) => c.debt.map((d) => [`${c.code}:${d.credential_level}`, d.median_debt] as const))
+    )
     const occupationsByCip = new Map(
       cips.map((c) => [
         c.code,
@@ -63,6 +71,7 @@ export async function GET(_request: NextRequest, ctx: RouteContext<'/api/schools
       source,
       programs: programs.map((p) => ({
         ...p,
+        national_median_debt: nationalDebt.get(`${p.cip_code}:${p.credential_level}`) ?? null,
         occupations: occupationsByCip.get(p.cip_code) ?? [],
       })),
     })
