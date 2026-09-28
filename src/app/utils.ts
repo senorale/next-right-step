@@ -56,4 +56,19 @@ export function calculateBreakEvenYears(
   return breakEvenYears;
 }
 
+/**
+ * Years until an education investment is recovered by the salary gain over a
+ * baseline (HS diploma, current salary, etc.). Returns null when the new
+ * salary does not exceed the baseline, meaning it never pays off.
+ */
+export function calculatePayoffYears(
+  totalCost: number,
+  newSalary: number,
+  baselineSalary: number
+): number | null {
+  const salaryDelta = newSalary - baselineSalary;
+  if (salaryDelta <= 0) return null;
+  return totalCost / salaryDelta;
+}
+
   
