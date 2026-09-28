@@ -37,7 +37,7 @@ export default function PayoffSummary({
       <Stat
         label="Total cost"
         value={money(f.totalCost)}
-        info={`Debt plus ${money(f.opportunityCost)} of ${baselineLabel} earnings given up while in school.`}
+        info={`Debt plus ${money(f.interest)} loan interest plus ${money(f.opportunityCost)} of ${baselineLabel} earnings given up while in school.`}
       />
       <Stat
         label={payoffLabel}

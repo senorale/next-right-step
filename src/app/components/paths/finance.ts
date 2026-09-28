@@ -1,4 +1,4 @@
-import { calculateMonthlyPayment, calculatePayoffYears } from '@/app/utils'
+import { calculateMonthlyPayment, calculatePayoffYears, calculateTotalInterestPaid } from '@/app/utils'
 import * as C from '@/app/constants/college_related_constants'
 
 export const HS_SALARY = C.HIGHSCHOOL_DIPLOMA_MEDIAN_SALARY
@@ -7,6 +7,8 @@ export const REPAYMENT_YEARS = C.STANDARD_REPAYMENT_YEARS
 
 export interface Financials {
   debt: number
+  /** Interest paid over standard repayment of the debt */
+  interest: number
   opportunityCost: number
   totalCost: number
   monthlyPayment: number
@@ -16,7 +18,7 @@ export interface Financials {
 }
 
 /**
- * Total cost = education debt + salary given up while in school.
+ * Total cost = education debt + loan interest + salary given up while in school.
  * Payoff timeline = total cost / (salary - baseline salary).
  */
 export function computeFinancials({
@@ -30,10 +32,12 @@ export function computeFinancials({
   salary: number
   baselineSalary: number
 }): Financials {
+  const interest = calculateTotalInterestPaid(debt, LOAN_RATE, REPAYMENT_YEARS)
   const opportunityCost = baselineSalary * yearsInSchool
-  const totalCost = debt + opportunityCost
+  const totalCost = debt + interest + opportunityCost
   return {
     debt,
+    interest,
     opportunityCost,
     totalCost,
     monthlyPayment: calculateMonthlyPayment(debt, LOAN_RATE, REPAYMENT_YEARS),

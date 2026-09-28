@@ -8,7 +8,7 @@ import OccupationSearch from '../components/paths/OccupationSearch'
 import SelectedPills from '../components/paths/SelectedPills'
 import ComparisonTable, { bestIndex } from '../components/paths/ComparisonTable'
 import BarChartComparison from '../components/paths/BarChartComparison'
-import { computeFinancials, HS_SALARY, type Financials } from '../components/paths/finance'
+import { computeFinancials, HS_SALARY, LOAN_RATE, REPAYMENT_YEARS, type Financials } from '../components/paths/finance'
 import { colorAt, money, moneyOrNA, schoolYears, years } from '../components/paths/format'
 import type { CareerCost, Occupation } from '../components/paths/types'
 
@@ -101,7 +101,9 @@ export default function CollegeVsAlternatives() {
   const options = chosen ? [...baselines, chosen] : baselines
   const payoffs = options.map((o) => (o.financials && o.yearsInSchool > 0 ? o.financials.payoffYears : null))
   const lifetime = options.map((o) =>
-    o.cost === null ? null : o.salary * (CAREER_YEARS - o.yearsInSchool) - o.cost
+    o.cost === null || !o.financials
+      ? null
+      : o.salary * (CAREER_YEARS - o.yearsInSchool) - o.cost - o.financials.interest
   )
 
   return (
@@ -154,12 +156,18 @@ export default function CollegeVsAlternatives() {
                     best: bestIndex(options.map((o) => o.salary), true),
                   },
                   {
+                    label: 'Loan interest',
+                    info: `Interest if the full cost is borrowed and repaid over ${REPAYMENT_YEARS} years at ${LOAN_RATE}%.`,
+                    values: options.map((o) => moneyOrNA(o.financials?.interest)),
+                  },
+                  {
                     label: 'Opportunity cost',
                     info: `High school median salary (${money(HS_SALARY)}) x years in school.`,
                     values: options.map((o) => moneyOrNA(o.financials?.opportunityCost)),
                   },
                   {
                     label: 'Total investment',
+                    info: 'Estimated cost plus loan interest plus opportunity cost.',
                     values: options.map((o) => moneyOrNA(o.financials?.totalCost)),
                   },
                   {
@@ -186,7 +194,7 @@ export default function CollegeVsAlternatives() {
           <Card>
             <CardContent className="pt-6">
               <BarChartComparison
-                title={`Lifetime earnings over a ${CAREER_YEARS}-year career, minus education cost`}
+                title={`Lifetime earnings over a ${CAREER_YEARS}-year career, minus education cost and interest`}
                 data={options.map((o, i) => ({ name: o.name, value: lifetime[i], color: colorAt(i) }))}
                 format={(v) => `$${(v / 1_000_000).toFixed(1)}M`}
               />

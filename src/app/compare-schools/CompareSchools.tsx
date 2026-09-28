@@ -9,7 +9,7 @@ import SelectedPills from '../components/paths/SelectedPills'
 import ComparisonTable, { bestIndex, type ComparisonRow } from '../components/paths/ComparisonTable'
 import BarChartComparison from '../components/paths/BarChartComparison'
 import { HS_SALARY, LOAN_RATE, REPAYMENT_YEARS } from '../components/paths/finance'
-import { calculateMonthlyPayment, calculatePayoffYears } from '@/app/utils'
+import { calculateMonthlyPayment, calculatePayoffYears, calculateTotalInterestPaid } from '@/app/utils'
 import { colorAt, money, moneyOrNA, pctOrNA, ratio, years } from '../components/paths/format'
 import type { School } from '../components/paths/types'
 
@@ -71,7 +71,10 @@ export default function CompareSchools() {
 
   const rows = schools.map((s) => {
     const price = netPrice(s, bracket)
-    const totalCost = price == null ? null : price * YEARS_IN_SCHOOL
+    const schoolCost = price == null ? null : price * YEARS_IN_SCHOOL
+    // Assumes the full net price is borrowed, so interest is added on top.
+    const totalCost =
+      schoolCost == null ? null : schoolCost + calculateTotalInterestPaid(schoolCost, LOAN_RATE, REPAYMENT_YEARS)
     return {
       s,
       price,
@@ -201,7 +204,7 @@ export default function CompareSchools() {
                   ...METRICS.filter((m) => metrics.has(m.key)).map((m) => metricRows[m.key]),
                   {
                     label: 'Payoff timeline',
-                    info: `Net price x ${YEARS_IN_SCHOOL} years, divided by the yearly earnings gain over a high school diploma (${money(HS_SALARY)}).`,
+                    info: `Net price x ${YEARS_IN_SCHOOL} years plus loan interest (${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%), divided by the yearly earnings gain over a high school diploma (${money(HS_SALARY)}).`,
                     values: rows.map((r) =>
                       r.totalCost == null || r.s.earnings_10yr == null
                         ? 'n/a'

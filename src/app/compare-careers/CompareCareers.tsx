@@ -8,7 +8,7 @@ import SelectedPills from '../components/paths/SelectedPills'
 import ComparisonTable, { bestIndex } from '../components/paths/ComparisonTable'
 import BarChartComparison from '../components/paths/BarChartComparison'
 import BaselinePicker, { baselineLabel, baselineSalary, type Baseline } from '../components/paths/BaselinePicker'
-import { computeFinancials } from '../components/paths/finance'
+import { computeFinancials, LOAN_RATE, REPAYMENT_YEARS } from '../components/paths/finance'
 import { colorAt, money, moneyOrNA, schoolYears, years } from '../components/paths/format'
 import type { CareerCost, Occupation } from '../components/paths/types'
 
@@ -121,8 +121,13 @@ export default function CompareCareers() {
                     values: rows.map((r) => (r.c.totalDebt === null ? 'Cost data unavailable' : money(r.c.totalDebt))),
                   },
                   {
+                    label: 'Loan interest',
+                    info: `Interest paid on the debt over standard ${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%.`,
+                    values: rows.map((r) => moneyOrNA(r.financials?.interest)),
+                  },
+                  {
                     label: 'Total cost',
-                    info: `Education debt plus ${baseName} earnings given up while in school.`,
+                    info: `Education debt plus loan interest plus ${baseName} earnings given up while in school.`,
                     values: rows.map((r) => moneyOrNA(r.financials?.totalCost)),
                     best: bestIndex(rows.map((r) => r.financials?.totalCost ?? null), false),
                   },
@@ -142,7 +147,7 @@ export default function CompareCareers() {
                   },
                   {
                     label: 'Monthly loan payment',
-                    info: 'Standard 10-year repayment at the federal undergraduate rate.',
+                    info: `Standard ${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%.`,
                     values: rows.map((r) => moneyOrNA(r.financials?.monthlyPayment)),
                   },
                 ]}
