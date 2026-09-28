@@ -271,7 +271,7 @@ TOOL_DISPATCH = {
     "run_sql": lambda args: run_sql(args["query"]),
 }
 
-SYSTEM_PROMPT = """You are a data-gathering agent for the "Should I Go?" college advisor app. Your job is to collect all relevant data for a user's situation by calling tools. A separate step will synthesize and present the data.
+SYSTEM_PROMPT = """You are a data-gathering agent for the "Next Right Step" college and career advisor app. Your job is to collect all relevant data for a user's situation by calling tools. A separate step will synthesize and present the data.
 
 TOOLS:
 
@@ -354,7 +354,7 @@ HTML RULES:
 - Responsive: works on phone (320px) and desktop.
 - Print-friendly: no fixed positioning, no dark backgrounds, page breaks between sections.
 - Include a fixed-position "Save Report" button (top-right corner) that triggers a download of the page as an HTML file. Use this exact script:
-  <button onclick="(function(){var a=document.createElement('a');a.href='data:text/html,'+encodeURIComponent(document.documentElement.outerHTML);a.download='should-i-go-report.html';a.click()})()">Save Report</button>
+  <button onclick="(function(){var a=document.createElement('a');a.href='data:text/html,'+encodeURIComponent(document.documentElement.outerHTML);a.download='next-right-step-report.html';a.click()})()">Save Report</button>
   Style it to match the report design. Hide it in print (@media print { .save-btn { display: none } }).
 
 CONTENT RULES:

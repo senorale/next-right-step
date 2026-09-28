@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from agent import run_agent_stream, generate_report, _extract_data_blocks, _json_default
 
-app = FastAPI(title="Should I Go - Agent API")
+app = FastAPI(title="Next Right Step - Agent API")
 
 
 class ChatRequest(BaseModel):

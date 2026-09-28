@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import * as C from '@/app/constants/college_related_constants'
 
 export const metadata: Metadata = {
-  title: 'FAQ · Should I Go To School?',
+  title: 'FAQ · Next Right Step',
 }
 
 const faqs: { q: string; a: ReactNode }[] = [

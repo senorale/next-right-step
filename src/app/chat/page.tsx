@@ -125,7 +125,7 @@ const SCHOOL_SITUATION_STEP: IntakeStep = {
   question: "What's your situation?",
   subtitle: "This shapes what data I focus on.",
   options: [
-    { value: 'deciding', label: "Deciding between programs/majors" },
+    { value: 'deciding', label: "Deciding between programs" },
     { value: 'current', label: "Already in a program, want to see where it leads" },
     { value: 'switching', label: "Thinking about switching programs" },
   ],
@@ -134,7 +134,7 @@ const SCHOOL_SITUATION_STEP: IntakeStep = {
 
 const PROGRAMS_STEP: IntakeStep = {
   key: 'programs',
-  question: "What program(s) or major(s) are you considering or currently in?",
+  question: "What program(s) are you considering or currently in?",
   subtitle: "List as many as you'd like, or say 'not sure' to see top programs.",
   placeholder: "e.g. computer science, biology, business...",
 }
@@ -844,7 +844,7 @@ function buildPrompt(answers: Record<string, string>): string {
     if (answers.specific_numbers) lines.push(`- My specific numbers: ${answers.specific_numbers}`)
     if (answers.occupation) lines.push(`- Occupation I'm interested in: ${answers.occupation}`)
     lines.push('')
-    lines.push('Compare these five options side by side: (1) HS diploma baseline, (2) Cashier, (3) Electrician, (4) Bachelor\'s degree median, (5) my chosen occupation. Include full financial analysis with break-even timeline.')
+    lines.push('Compare these five options side by side: (1) HS diploma baseline, (2) Cashier, (3) Electrician, (4) Bachelor\'s degree median, (5) my chosen occupation. Include full financial analysis with payoff timeline.')
   }
 
   if (path === 'path2') {
@@ -870,13 +870,13 @@ function buildPrompt(answers: Record<string, string>): string {
     if (answers.school_name) lines.push(`- School: ${answers.school_name}`)
     if (answers.school_situation) {
       const situationText: Record<string, string> = {
-        deciding: 'Deciding between programs/majors',
+        deciding: 'Deciding between programs',
         current: 'Already in a program, exploring outcomes',
         switching: 'Thinking about switching programs',
       }
       lines.push(`- Situation: ${situationText[answers.school_situation] ?? answers.school_situation}`)
     }
-    if (answers.programs) lines.push(`- Programs/majors: ${answers.programs}`)
+    if (answers.programs) lines.push(`- Programs: ${answers.programs}`)
     if (answers.switch_reason) lines.push(`- Reason for switching: ${answers.switch_reason}`)
     if (answers.program_priority) lines.push(`- What matters most: ${answers.program_priority}`)
     lines.push('')
@@ -895,7 +895,7 @@ function buildPrompt(answers: Record<string, string>): string {
     }
     if (answers.current_field) lines.push(`- Current field/study: ${answers.current_field}`)
     lines.push('')
-    lines.push('Compare each career path: education required, timeline, cost, salary, bright outlook, break-even. Full financial analysis for all paths.')
+    lines.push('Compare each career path: education required, timeline, cost, salary, bright outlook, payoff timeline. Full financial analysis for all paths.')
   }
 
   if (path === 'path5') {
@@ -910,7 +910,7 @@ function buildPrompt(answers: Record<string, string>): string {
     }
     if (answers.current_field) lines.push(`- Current field/study: ${answers.current_field}`)
     lines.push('')
-    lines.push('Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected salary, break-even. Show gap analysis if I have relevant education.')
+    lines.push('Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected salary, time to recoup. Show gap analysis if I have relevant education.')
   }
 
   return lines.join('\n')

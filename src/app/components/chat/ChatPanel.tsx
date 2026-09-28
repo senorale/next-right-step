@@ -119,7 +119,7 @@ export default function ChatPanel({
         <div>
           <h2 className="text-sm font-semibold">College Advisor</h2>
           <p className="text-xs text-muted-foreground">
-            Ask about majors, salaries, and tuition
+            Ask about degrees, salaries, and tuition
           </p>
         </div>
         <div className="flex gap-1">
@@ -192,7 +192,7 @@ export default function ChatPanel({
                 handleSubmit(e)
               }
             }}
-            placeholder="Ask about a major or career..."
+            placeholder="Ask about a degree or career..."
             disabled={loading}
             rows={1}
             className="flex min-h-9 max-h-[120px] flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"

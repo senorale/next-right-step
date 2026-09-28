@@ -6,7 +6,7 @@ const FEEDBACK_TO = 'alecarvajaldev@gmail.com'
 
 const VALID_AREAS = ['app', 'agent'] as const
 const VALID_CATEGORIES: Record<string, string[]> = {
-  app: ['Data accuracy', 'Missing school or major', 'UI/design', 'Feature request', 'Other'],
+  app: ['Data accuracy', 'Missing school or program', 'UI/design', 'Feature request', 'Other'],
   agent: ['Response quality', 'Missing or wrong data', 'Too slow', 'Confusing flow', 'Other'],
 }
 
@@ -29,10 +29,10 @@ export async function POST(req: NextRequest) {
     }
 
     const areaLabel = area === 'app' ? 'Base App' : 'Counselor Agent'
-    const subject = `[Should I Go] ${areaLabel} — ${category}`
+    const subject = `[Next Right Step] ${areaLabel} — ${category}`
 
     await resend.emails.send({
-      from: 'Should I Go Feedback <onboarding@resend.dev>',
+      from: 'Next Right Step Feedback <onboarding@resend.dev>',
       to: FEEDBACK_TO,
       subject,
       text: `Area: ${areaLabel}\nCategory: ${category}\n\n${message.trim()}`,
