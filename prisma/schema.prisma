@@ -14,26 +14,26 @@ datasource db {
 }
 
 model OccupationCategory {
-  id                       String                  @id @default(uuid())
-  name                     String                  @unique
-  occupation_code          String                  @unique
+  id                        String                  @id @default(uuid())
+  name                      String                  @unique
+  occupation_code           String                  @unique
   occupation_sub_categories OccupationSubCategory[]
-  created_at              DateTime                @default(now())
-  updated_at              DateTime                @updatedAt
+  created_at                DateTime                @default(now())
+  updated_at                DateTime                @updatedAt
 }
 
 model OccupationSubCategory {
-  id                  String             @id @default(uuid())
-  name                String
-  occupation_code     String
-  annual_salary       Float
-  category           OccupationCategory @relation(fields: [category_id], references: [id])
-  category_id        String
+  id                      String             @id @default(uuid())
+  name                    String
+  occupation_code         String
+  annual_salary           Float
+  category                OccupationCategory @relation(fields: [category_id], references: [id])
+  category_id             String
   typical_years_of_school Float?
-  major_mappings     MajorOccupation[]
-  cip_mappings       CipOccupation[]
-  created_at         DateTime           @default(now())
-  updated_at         DateTime           @updatedAt
+  major_mappings          MajorOccupation[]
+  cip_mappings            CipOccupation[]
+  created_at              DateTime           @default(now())
+  updated_at              DateTime           @updatedAt
 
   @@unique([category_id, occupation_code])
   @@index([occupation_code])
@@ -48,12 +48,12 @@ model Major {
 }
 
 model MajorOccupation {
-  id            String               @id @default(uuid())
-  major         Major                @relation(fields: [major_id], references: [id])
+  id            String                @id @default(uuid())
+  major         Major                 @relation(fields: [major_id], references: [id])
   major_id      String
   occupation    OccupationSubCategory @relation(fields: [occupation_id], references: [id])
   occupation_id String
-  relevance     Float                // 0-1, how likely this major leads to this occupation
+  relevance     Float // 0-1, how likely this major leads to this occupation
 
   @@unique([major_id, occupation_id])
   @@index([major_id])
@@ -71,8 +71,8 @@ model CipCode {
 }
 
 model CipOccupation {
-  id            String               @id @default(uuid())
-  cip           CipCode              @relation(fields: [cip_id], references: [id])
+  id            String                @id @default(uuid())
+  cip           CipCode               @relation(fields: [cip_id], references: [id])
   cip_id        String
   occupation    OccupationSubCategory @relation(fields: [occupation_id], references: [id])
   occupation_id String
@@ -89,12 +89,12 @@ model ProgramDebt {
   id               String   @id @default(uuid())
   cip              CipCode  @relation(fields: [cip_id], references: [id])
   cip_id           String
-  credential_level Int      // 1=Undergrad Cert, 2=Associate, 3=Bachelor, 5=Master, 6=Doctoral, 7=First Professional, 8=Grad/Prof Cert
-  credential_label String   // e.g. "Bachelor's Degree"
-  school_type      String   // public | private_nonprofit | all
+  credential_level Int // 1=Undergrad Cert, 2=Associate, 3=Bachelor, 5=Master, 6=Doctoral, 7=First Professional, 8=Grad/Prof Cert
+  credential_label String // e.g. "Bachelor's Degree"
+  school_type      String // public | private_nonprofit | all
   median_debt      Int
   mean_debt        Int?
-  sample_size      Int      // number of schools reporting
+  sample_size      Int // number of schools reporting
   source           String   @default("College Scorecard: Most-Recent-Cohorts-Field-of-Study")
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
@@ -108,14 +108,14 @@ model ProgramDebt {
 // multiplies by years in school to get a total. Public out-of-state has no
 // net price because the Scorecard only reports net price for in-state students.
 model TuitionMedian {
-  id                       String   @id @default(uuid())
-  cohort                   String   @unique // public_in_state | public_out_of_state | private_nonprofit | all
-  label                    String            // human label e.g. "Public (in-state)"
-  sticker_annual           Int?              // median tuition + fees, before aid
-  net_price_annual         Int?              // median cost of attendance minus grant aid
-  cost_of_attendance_annual Int?             // median full cost incl. living, before aid
-  sample_size              Int               // number of schools in the median
-  source                   String   @default("College Scorecard: Most-Recent-Cohorts-Institution")
-  created_at               DateTime @default(now())
-  updated_at               DateTime @updatedAt
+  id                        String   @id @default(uuid())
+  cohort                    String   @unique // public_in_state | public_out_of_state | private_nonprofit | all
+  label                     String // human label e.g. "Public (in-state)"
+  sticker_annual            Int? // median tuition + fees, before aid
+  net_price_annual          Int? // median cost of attendance minus grant aid
+  cost_of_attendance_annual Int? // median full cost incl. living, before aid
+  sample_size               Int // number of schools in the median
+  source                    String   @default("College Scorecard: Most-Recent-Cohorts-Institution")
+  created_at                DateTime @default(now())
+  updated_at                DateTime @updatedAt
 }
