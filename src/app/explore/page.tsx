@@ -120,7 +120,7 @@ export default async function Home() {
           <h2 className="text-xl font-semibold text-center">Want to learn more?</h2>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <ToolCard
-              href="/majors"
+              href="/compare"
               title="Compare majors"
               body="Choosing a major? Compare salaries and see if it pays off for different fields of study."
             />

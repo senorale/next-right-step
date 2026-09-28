@@ -65,6 +65,7 @@ model CipCode {
   code        String          @unique // 4-digit CIP, no dot, e.g. "1107"
   title       String
   occupations CipOccupation[]
+  debt        ProgramDebt[]
   created_at  DateTime        @default(now())
   updated_at  DateTime        @updatedAt
 }
@@ -79,6 +80,27 @@ model CipOccupation {
   @@unique([cip_id, occupation_id])
   @@index([cip_id])
   @@index([occupation_id])
+}
+
+// Median student debt at completion, aggregated across schools from the
+// College Scorecard field-of-study data. One row per CIP + credential level
+// + school type combination.
+model ProgramDebt {
+  id               String   @id @default(uuid())
+  cip              CipCode  @relation(fields: [cip_id], references: [id])
+  cip_id           String
+  credential_level Int      // 1=Undergrad Cert, 2=Associate, 3=Bachelor, 5=Master, 6=Doctoral, 7=First Professional, 8=Grad/Prof Cert
+  credential_label String   // e.g. "Bachelor's Degree"
+  school_type      String   // public | private_nonprofit | all
+  median_debt      Int
+  mean_debt        Int?
+  sample_size      Int      // number of schools reporting
+  source           String   @default("College Scorecard: Most-Recent-Cohorts-Field-of-Study")
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@unique([cip_id, credential_level, school_type])
+  @@index([cip_id])
 }
 
 // Median cost of attendance figures per school cohort, sourced from the
