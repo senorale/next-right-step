@@ -33,27 +33,27 @@ function computeTotals(medianDebt: number, salary: number, schoolYears: number) 
   return { interest, opportunity, totalRepaid, totalCost, breakEven, monthly, medianDebt }
 }
 
-export default function CompareMajorsTab({
-  majors,
+export default function CompareDegreesTab({
+  degrees,
   onRemove,
 }: {
-  majors: ComparisonData[]
+  degrees: ComparisonData[]
   onRemove: (id: string) => void
 }) {
   const rows = useMemo(() => {
-    return majors.map((m) => {
+    return degrees.map((m) => {
       const debt = m.debt?.all ?? m.debt?.public ?? m.debt?.privateNonprofit ?? 0
       return {
         ...m,
         totals: computeTotals(debt, m.weightedSalary, m.weightedYears),
       }
     })
-  }, [majors])
+  }, [degrees])
 
   if (rows.length === 0) {
     return (
       <p className="text-sm text-muted-foreground text-center py-8">
-        Search and add up to 3 majors to compare debt, salary, and break-even.
+        Search and add up to 3 degrees to compare debt, salary, and break-even.
       </p>
     )
   }
@@ -67,14 +67,14 @@ export default function CompareMajorsTab({
       <div className="flex flex-wrap gap-2">
         {rows.map((r, i) => (
           <span
-            key={r.major.id}
+            key={r.degree.id}
             className="inline-flex items-center gap-1 rounded-full border px-3 py-1 text-sm"
             style={{ borderColor: COLORS[i % COLORS.length] }}
           >
-            {r.major.name}
+            {r.degree.name}
             <button
-              onClick={() => onRemove(r.major.id)}
-              aria-label={`Remove ${r.major.name}`}
+              onClick={() => onRemove(r.degree.id)}
+              aria-label={`Remove ${r.degree.name}`}
               className="text-muted-foreground hover:text-foreground"
             >
               <X className="h-3.5 w-3.5" />
@@ -91,17 +91,17 @@ export default function CompareMajorsTab({
               <th className="text-left py-2 pr-4 font-medium text-muted-foreground" />
               {rows.map((r, i) => (
                 <th
-                  key={r.major.id}
+                  key={r.degree.id}
                   className="text-center py-2 px-2 font-semibold"
                   style={{ color: COLORS[i % COLORS.length] }}
                 >
-                  {r.major.name}
+                  {r.degree.name}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            <Row label="Credential" values={rows.map((r) => r.debt?.credentialLabel ?? 'N/A')} />
+            <Row label="Education level" values={rows.map((r) => r.debt?.credentialLabel ?? 'N/A')} />
             <Row label="Years in school" values={rows.map((r) => String(r.weightedYears))} />
             <Row label="Median salary" values={rows.map((r) => fmt(r.weightedSalary))} />
             <Row label="Median debt" values={rows.map((r) => fmt(r.totals.medianDebt))} />
@@ -131,9 +131,9 @@ export default function CompareMajorsTab({
       <div className="space-y-3">
         <div className="text-xs font-medium text-muted-foreground">Median debt</div>
         {rows.map((r, i) => (
-          <div key={r.major.id} className="space-y-1">
+          <div key={r.degree.id} className="space-y-1">
             <div className="flex items-center justify-between text-xs">
-              <span className="truncate pr-2">{r.major.name}</span>
+              <span className="truncate pr-2">{r.degree.name}</span>
               <span className="shrink-0 tabular-nums font-semibold">{fmt(r.totals.medianDebt)}</span>
             </div>
             <div className="h-3 w-full overflow-hidden rounded-full bg-muted">
@@ -151,11 +151,11 @@ export default function CompareMajorsTab({
 
       {/* Total cost bar chart */}
       <div className="space-y-3">
-        <div className="text-xs font-medium text-muted-foreground">Total cost of degree</div>
+        <div className="text-xs font-medium text-muted-foreground">Total cost</div>
         {rows.map((r, i) => (
-          <div key={r.major.id} className="space-y-1">
+          <div key={r.degree.id} className="space-y-1">
             <div className="flex items-center justify-between text-xs">
-              <span className="truncate pr-2">{r.major.name}</span>
+              <span className="truncate pr-2">{r.degree.name}</span>
               <span className="shrink-0 tabular-nums font-semibold">{fmt(r.totals.totalCost)}</span>
             </div>
             <div className="h-3 w-full overflow-hidden rounded-full bg-muted">

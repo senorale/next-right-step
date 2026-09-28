@@ -22,11 +22,11 @@ export interface PersonalParams {
 export default function PersonalPayoffCalculator({
   params,
   onParamsChange,
-  majorName,
+  degreeName,
 }: {
   params: PersonalParams
   onParamsChange: (params: PersonalParams) => void
-  majorName: string
+  degreeName: string
 }) {
   const update = (patch: Partial<PersonalParams>) =>
     onParamsChange({ ...params, ...patch })
@@ -53,7 +53,7 @@ export default function PersonalPayoffCalculator({
       <div className="space-y-4">
         <SliderField
           label="Total student debt"
-          tooltip="Total amount you expect to borrow for this degree, including all years."
+          tooltip="Total amount you expect to borrow, including all years."
           value={params.debt}
           display={fmt(params.debt)}
           min={0}
@@ -64,7 +64,7 @@ export default function PersonalPayoffCalculator({
 
         <SliderField
           label="Expected salary"
-          tooltip={`Your expected annual salary after graduating. Adjust to match your expectations for ${majorName}.`}
+          tooltip={`Your expected annual salary after graduating. Adjust to match your expectations for ${degreeName}.`}
           value={params.salary}
           display={`${fmt(params.salary)}/yr`}
           min={20000}
@@ -113,7 +113,7 @@ export default function PersonalPayoffCalculator({
       </div>
 
       <div className="border-t pt-4 text-center">
-        <div className="text-sm text-muted-foreground">Total cost of degree</div>
+        <div className="text-sm text-muted-foreground">Total cost</div>
         <div className="text-2xl font-bold">{fmt(totals.totalCost)}</div>
       </div>
 

@@ -121,8 +121,8 @@ export default async function Home() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <ToolCard
               href="/compare"
-              title="Compare majors"
-              body="Choosing a major? Compare salaries and see if it pays off for different fields of study."
+              title="Degree payoff"
+              body="Compare debt, salary, and break-even across degrees and programs."
             />
             <ToolCard
               href="/occupations"

@@ -99,7 +99,7 @@ export async function GET(request: NextRequest) {
     const allDebtLevels = [...new Set(cip.debt.map((d) => d.credential_level))].sort()
 
     return NextResponse.json({
-      major: { id: cip.id, name: cip.title },
+      degree: { id: cip.id, name: cip.title },
       weightedSalary: Math.round(weightedSalary),
       weightedYears: Math.round(weightedYears * 10) / 10,
       debt,

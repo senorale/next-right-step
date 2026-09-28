@@ -10,7 +10,7 @@ import DegreePayoffComparison, {
 import PersonalPayoffCalculator, {
   type PersonalParams,
 } from '../components/compare/PersonalPayoffCalculator'
-import CompareMajorsTab from '../components/compare/CompareMajorsTab'
+import CompareDegreesTab from '../components/compare/CompareDegreesTab'
 import { Input } from '@/components/ui/input'
 import * as CollegeConstants from '@/app/constants/college_related_constants'
 
@@ -23,38 +23,47 @@ interface OccupationLink {
   occupation: { id: string; name: string; annual_salary: number; typical_years_of_school: number | null }
 }
 
-interface Major {
+interface Degree {
   id: string
   name: string
   occupations: OccupationLink[]
 }
 
 interface ApiCompareResponse {
-  major: { id: string; name: string }
+  degree: { id: string; name: string }
   weightedSalary: number
   weightedYears: number
   debt: ComparisonData['debt']
   availableCredentialLevels: number[]
 }
 
-type Tab = 'institution' | 'compare' | 'personal'
+function toComparisonData(data: ApiCompareResponse): ComparisonData {
+  return {
+    degree: data.degree,
+    weightedSalary: data.weightedSalary,
+    weightedYears: data.weightedYears,
+    debt: data.debt,
+  }
+}
+
+type Tab = 'program' | 'compare' | 'personal'
 
 function CompareContent() {
   const searchParams = useSearchParams()
-  const majorIdParam = searchParams.get('majorId')
+  const degreeIdParam = searchParams.get('majorId')
   const tabParam = searchParams.get('tab') as Tab | null
 
-  const [allMajors, setAllMajors] = useState<Major[]>([])
+  const [allDegrees, setAllDegrees] = useState<Degree[]>([])
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<Tab>(tabParam ?? 'institution')
+  const [tab, setTab] = useState<Tab>(tabParam ?? 'program')
 
-  // Institution tab state
-  const [selectedMajor, setSelectedMajor] = useState<Major | null>(null)
-  const [compareData, setCompareData] = useState<ComparisonData | null>(null)
+  // Program tab state
+  const [selectedDegree, setSelectedDegree] = useState<Degree | null>(null)
+  const [programData, setProgramData] = useState<ComparisonData | null>(null)
   const [personalParams, setPersonalParams] = useState<PersonalParams | null>(null)
 
   // Compare tab state
-  const [compareMajors, setCompareMajors] = useState<ComparisonData[]>([])
+  const [compareDegrees, setCompareDegrees] = useState<ComparisonData[]>([])
   const [compareLoading, setCompareLoading] = useState(false)
 
   // Search state
@@ -64,14 +73,14 @@ function CompareContent() {
   useEffect(() => {
     fetch('/api/majors')
       .then((r) => r.json())
-      .then((majors: Major[]) => {
-        setAllMajors(majors)
+      .then((degrees: Degree[]) => {
+        setAllDegrees(degrees)
 
-        if (majorIdParam) {
-          const match = majors.find((m: Major) => m.id === majorIdParam)
+        if (degreeIdParam) {
+          const match = degrees.find((d: Degree) => d.id === degreeIdParam)
           if (match) {
-            setSelectedMajor(match)
-            loadSingleMajor(match)
+            setSelectedDegree(match)
+            loadDegree(match)
             return
           }
         }
@@ -80,20 +89,14 @@ function CompareContent() {
       })
       .catch(() => setLoading(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [majorIdParam])
+  }, [degreeIdParam])
 
-  const loadSingleMajor = useCallback((major: Major) => {
+  const loadDegree = useCallback((degree: Degree) => {
     setLoading(true)
-    fetch(`/api/compare?majorId=${major.id}`)
+    fetch(`/api/compare?majorId=${degree.id}`)
       .then((r) => r.json())
       .then((data: ApiCompareResponse) => {
-        const comparison: ComparisonData = {
-          major: data.major,
-          weightedSalary: data.weightedSalary,
-          weightedYears: data.weightedYears,
-          debt: data.debt,
-        }
-        setCompareData(comparison)
+        setProgramData(toComparisonData(data))
 
         const defaultDebt = data.debt?.all ?? data.debt?.public ?? data.debt?.privateNonprofit ?? 30000
         setPersonalParams({
@@ -105,7 +108,7 @@ function CompareContent() {
         })
 
         const url = new URL(window.location.href)
-        url.searchParams.set('majorId', major.id)
+        url.searchParams.set('majorId', degree.id)
         window.history.replaceState(null, '', url.toString())
 
         setLoading(false)
@@ -114,53 +117,47 @@ function CompareContent() {
       .catch(() => setLoading(false))
   }, [])
 
-  const addCompareMajor = useCallback((major: Major) => {
-    if (compareMajors.some((m) => m.major.id === major.id)) return
-    if (compareMajors.length >= MAX_COMPARE) return
+  const addDegree = useCallback((degree: Degree) => {
+    if (compareDegrees.some((d) => d.degree.id === degree.id)) return
+    if (compareDegrees.length >= MAX_COMPARE) return
 
     setCompareLoading(true)
-    fetch(`/api/compare?majorId=${major.id}`)
+    fetch(`/api/compare?majorId=${degree.id}`)
       .then((r) => r.json())
       .then((data: ApiCompareResponse) => {
-        const comparison: ComparisonData = {
-          major: data.major,
-          weightedSalary: data.weightedSalary,
-          weightedYears: data.weightedYears,
-          debt: data.debt,
-        }
-        setCompareMajors((prev) => [...prev, comparison])
+        setCompareDegrees((prev) => [...prev, toComparisonData(data)])
         setCompareLoading(false)
       })
       .catch(() => setCompareLoading(false))
-  }, [compareMajors])
+  }, [compareDegrees])
 
-  const removeCompareMajor = useCallback((id: string) => {
-    setCompareMajors((prev) => prev.filter((m) => m.major.id !== id))
+  const removeDegree = useCallback((id: string) => {
+    setCompareDegrees((prev) => prev.filter((d) => d.degree.id !== id))
   }, [])
 
   const handleSelect = useCallback(
-    (m: Major) => {
+    (d: Degree) => {
       setQuery('')
       if (tab === 'compare') {
-        addCompareMajor(m)
+        addDegree(d)
       } else {
-        setSelectedMajor(m)
-        loadSingleMajor(m)
+        setSelectedDegree(d)
+        loadDegree(d)
       }
     },
-    [tab, addCompareMajor, loadSingleMajor]
+    [tab, addDegree, loadDegree]
   )
 
   const searchResults = useMemo(() => {
     if (query.trim().length < 2) return []
     const q = query.toLowerCase()
     const excludeIds = tab === 'compare'
-      ? new Set(compareMajors.map((m) => m.major.id))
+      ? new Set(compareDegrees.map((d) => d.degree.id))
       : new Set<string>()
-    return allMajors
-      .filter((m) => m.name.toLowerCase().includes(q) && !excludeIds.has(m.id))
+    return allDegrees
+      .filter((d) => d.name.toLowerCase().includes(q) && !excludeIds.has(d.id))
       .slice(0, 8)
-  }, [query, allMajors, tab, compareMajors])
+  }, [query, allDegrees, tab, compareDegrees])
 
   const handleTabChange = useCallback((newTab: Tab) => {
     setTab(newTab)
@@ -175,26 +172,26 @@ function CompareContent() {
     )
   }
 
-  const atMax = tab === 'compare' && compareMajors.length >= MAX_COMPARE
+  const atMax = tab === 'compare' && compareDegrees.length >= MAX_COMPARE
   const searchPlaceholder = tab === 'compare'
     ? atMax
       ? 'Remove one to add another'
-      : `Add a major (${compareMajors.length}/${MAX_COMPARE})...`
-    : selectedMajor
-      ? selectedMajor.name
-      : 'Search for a major...'
+      : `Add a degree (${compareDegrees.length}/${MAX_COMPARE})...`
+    : selectedDegree
+      ? selectedDegree.name
+      : 'Search for a degree...'
 
-  const showSearch = tab !== 'personal' || !compareData
+  const showSearch = tab !== 'personal' || !programData
 
   return (
     <div className="space-y-6">
       {/* Tabs */}
       <div className="grid grid-cols-3 gap-1 rounded-lg border bg-muted/50 p-1">
-        <TabButton active={tab === 'institution'} onClick={() => handleTabChange('institution')}>
-          By institution
+        <TabButton active={tab === 'program'} onClick={() => handleTabChange('program')}>
+          By program
         </TabButton>
         <TabButton active={tab === 'compare'} onClick={() => handleTabChange('compare')}>
-          Compare majors
+          Compare degrees
         </TabButton>
         <TabButton active={tab === 'personal'} onClick={() => handleTabChange('personal')}>
           My numbers
@@ -214,15 +211,15 @@ function CompareContent() {
           />
           {searchResults.length > 0 && (
             <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
-              {searchResults.map((m) => (
+              {searchResults.map((d) => (
                 <button
-                  key={m.id}
-                  onClick={() => handleSelect(m)}
+                  key={d.id}
+                  onClick={() => handleSelect(d)}
                   className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-accent"
                 >
-                  <span className="truncate pr-2">{m.name}</span>
+                  <span className="truncate pr-2">{d.name}</span>
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {m.occupations.length} occupations
+                    {d.occupations.length} occupations
                   </span>
                 </button>
               ))}
@@ -232,12 +229,12 @@ function CompareContent() {
       )}
 
       {/* Tab content */}
-      {tab === 'institution' && (
-        compareData ? (
-          <DegreePayoffComparison data={compareData} />
+      {tab === 'program' && (
+        programData ? (
+          <DegreePayoffComparison data={programData} />
         ) : (
           <p className="text-sm text-muted-foreground text-center py-8">
-            Search for a major to compare public vs. private school debt and break-even.
+            Search for a degree to compare programs at public vs. private schools.
           </p>
         )
       )}
@@ -247,20 +244,20 @@ function CompareContent() {
           {compareLoading && (
             <div className="text-sm text-muted-foreground text-center py-2">Loading...</div>
           )}
-          <CompareMajorsTab majors={compareMajors} onRemove={removeCompareMajor} />
+          <CompareDegreesTab degrees={compareDegrees} onRemove={removeDegree} />
         </>
       )}
 
       {tab === 'personal' && (
-        compareData && personalParams ? (
+        programData && personalParams ? (
           <PersonalPayoffCalculator
             params={personalParams}
             onParamsChange={setPersonalParams}
-            majorName={compareData.major.name}
+            degreeName={programData.degree.name}
           />
         ) : (
           <p className="text-sm text-muted-foreground text-center py-8">
-            Search for a major in the &ldquo;By institution&rdquo; tab first, then switch here to adjust numbers.
+            Search for a degree in the &ldquo;By program&rdquo; tab first, then switch here to adjust numbers.
           </p>
         )
       )}

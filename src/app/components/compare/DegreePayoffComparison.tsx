@@ -21,7 +21,7 @@ export interface DebtData {
 }
 
 export interface ComparisonData {
-  major: { id: string; name: string }
+  degree: { id: string; name: string }
   weightedSalary: number
   weightedYears: number
   debt: DebtData | null
@@ -64,7 +64,7 @@ function DebtColumn({
         <Stat label={`Opportunity cost (${schoolYears}yr)`} value={fmt(totals.opportunity)} />
       </div>
       <div className="border-t pt-3 text-center">
-        <div className="text-sm text-muted-foreground">Total cost of degree</div>
+        <div className="text-sm text-muted-foreground">Total cost</div>
         <div className="text-xl font-bold">{fmt(totals.totalCost)}</div>
       </div>
       <div className="text-center">
@@ -99,8 +99,8 @@ export default function DegreePayoffComparison({
   if (!data.debt) {
     return (
       <p className="text-sm text-muted-foreground text-center py-4">
-        No debt data available for {data.major.name}. Debt data from College Scorecard
-        is not reported for all fields of study.
+        No debt data available for {data.degree.name}. College Scorecard does not report
+        debt data for all degrees.
       </p>
     )
   }
@@ -112,7 +112,7 @@ export default function DegreePayoffComparison({
   return (
     <div className="space-y-6">
       <div className="text-center space-y-1">
-        <div className="text-sm font-medium">{data.major.name}</div>
+        <div className="text-sm font-medium">{data.degree.name}</div>
         <div className="text-xs text-muted-foreground">
           {data.debt.credentialLabel} · {data.weightedYears} years · {fmt(data.weightedSalary)}/yr median salary
         </div>
