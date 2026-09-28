@@ -5,28 +5,38 @@ import { NextResponse } from 'next/server'
 
 export async function GET() {
   try {
-    const majors = await prisma.major.findMany({
+    const cipCodes = await prisma.cipCode.findMany({
       select: {
         id: true,
-        name: true,
+        code: true,
+        title: true,
         occupations: {
           select: {
-            relevance: true,
             occupation: {
               select: {
                 id: true,
                 name: true,
                 annual_salary: true,
+                typical_years_of_school: true,
               },
             },
           },
-          orderBy: { relevance: 'desc' },
         },
       },
-      orderBy: { name: 'asc' },
+      orderBy: { title: 'asc' },
     })
 
-    return NextResponse.json(majors)
+    const result = cipCodes.map((cip) => ({
+      id: cip.id,
+      name: cip.title,
+      code: cip.code,
+      occupations: cip.occupations.map((link) => ({
+        relevance: 1,
+        occupation: link.occupation,
+      })),
+    }))
+
+    return NextResponse.json(result)
   } catch (error) {
     console.error('Error fetching majors:', error)
     return NextResponse.json({ error: 'Failed to fetch majors' }, { status: 500 })
