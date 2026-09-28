@@ -10,6 +10,7 @@ interface Occupation {
   id: string
   name: string
   annual_salary: number
+  typical_years_of_school: number | null
 }
 
 const MAX_OCCUPATIONS = 5
@@ -145,6 +146,13 @@ export default function CompareOccupations() {
                         {fmt(o.annual_salary)}
                       </span>
                     </div>
+                    {o.typical_years_of_school != null && (
+                      <div className="text-xs text-muted-foreground">
+                        {o.typical_years_of_school === 0
+                          ? 'No degree required'
+                          : `${o.typical_years_of_school}yr of school`}
+                      </div>
+                    )}
                     <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                       <div
                         className="h-full rounded-full"

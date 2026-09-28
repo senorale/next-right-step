@@ -15,6 +15,7 @@ interface OccupationLink {
     id: string
     name: string
     annual_salary: number
+    typical_years_of_school: number | null
   }
 }
 
@@ -56,6 +57,15 @@ function topSalary(occupations: OccupationLink[]) {
   return Math.max(0, ...occupations.map((o) => o.occupation.annual_salary))
 }
 
+function weightedYearsOfSchool(occupations: OccupationLink[]) {
+  if (occupations.length === 0) return DEFAULT_YEARS
+  const totalWeight = occupations.reduce((s, o) => s + o.relevance, 0)
+  const avg = occupations.reduce(
+    (s, o) => s + (o.occupation.typical_years_of_school ?? 4) * o.relevance, 0
+  ) / totalWeight
+  return Math.round(avg * 10) / 10
+}
+
 export default function CompareMajors() {
   const [mode, setMode] = useState<Mode>('compare')
   const [allMajors, setAllMajors] = useState<Major[]>([])
@@ -63,11 +73,10 @@ export default function CompareMajors() {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
 
-  const [costOfSchool, setCostOfSchool] = useState('')
+  const [annualTuition, setAnnualTuition] = useState('')
   const [amountBorrowed, setAmountBorrowed] = useState(String(MEDIAN_DEBT))
   const [rate, setRate] = useState(String(DEFAULT_RATE))
   const [term, setTerm] = useState(String(MEDIAN_TERM_YEARS))
-  const [years, setYears] = useState(String(DEFAULT_YEARS))
   const [hsSalary, setHsSalary] = useState(String(DEFAULT_HS_SALARY))
 
   useEffect(() => {
@@ -80,7 +89,7 @@ export default function CompareMajors() {
       .then((meds: { cohort: string; net_price_annual: number | null; sticker_annual: number | null }[]) => {
         const inState = meds.find((m) => m.cohort === 'public_in_state')
         const annual = inState?.net_price_annual ?? inState?.sticker_annual
-        if (annual) setCostOfSchool(String(annual * DEFAULT_YEARS))
+        if (annual) setAnnualTuition(String(annual))
       })
       .catch(() => {})
   }, [])
@@ -103,12 +112,12 @@ export default function CompareMajors() {
   const removeMajor = (id: string) => setSelected((prev) => prev.filter((s) => s.id !== id))
   const toggleExpand = (id: string) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
 
-  const investment = useMemo(() => {
-    const school = num(costOfSchool)
+  function investmentForYears(schoolYears: number) {
+    const school = num(annualTuition) * schoolYears
     const interest = calculateTotalInterestPaid(num(amountBorrowed), num(rate), num(term))
-    const opportunity = num(hsSalary) * num(years)
+    const opportunity = num(hsSalary) * schoolYears
     return { school, interest, opportunity, total: school + interest + opportunity }
-  }, [costOfSchool, amountBorrowed, rate, term, years, hsSalary])
+  }
 
   const atMax = selected.length >= MAX_MAJORS
   const maxWeighted = Math.max(1, ...selected.map((m) => weightedMedianSalary(m.occupations)))
@@ -211,22 +220,15 @@ export default function CompareMajors() {
                 Prefilled with national medians. Edit any to match your situation.
               </p>
               <div className="grid grid-cols-2 gap-4">
-                <Field label="Cost of school ($)" value={costOfSchool} onChange={setCostOfSchool} />
-                <Field label="Years in school" value={years} onChange={setYears} />
+                <Field label="Annual tuition ($)" value={annualTuition} onChange={setAnnualTuition} />
                 <Field label="Amount borrowed ($)" value={amountBorrowed} onChange={setAmountBorrowed} />
                 <Field label="Loan interest rate (%)" value={rate} onChange={setRate} step="0.1" />
                 <Field label="Repayment plan (years)" value={term} onChange={setTerm} />
                 <Field label="Salary without degree ($)" value={hsSalary} onChange={setHsSalary} />
               </div>
-              <div className="grid grid-cols-3 gap-3 border-t pt-4 text-center">
-                <Stat label="Cost of school" value={fmt(investment.school)} />
-                <Stat label="Loan interest" value={fmt(investment.interest)} />
-                <Stat label="Opportunity" value={fmt(investment.opportunity)} />
-              </div>
-              <div className="text-center">
-                <div className="text-sm text-muted-foreground">Total investment</div>
-                <div className="text-2xl font-bold">{fmt(investment.total)}</div>
-              </div>
+              <p className="text-xs text-muted-foreground border-t pt-3">
+                Years of school and total cost are calculated per field of study from O*NET education data.
+              </p>
             </CardContent>
           </Card>
         )}
@@ -250,8 +252,10 @@ export default function CompareMajors() {
                 .map((m, i) => {
                   const weighted = weightedMedianSalary(m.occupations)
                   const top = topSalary(m.occupations)
+                  const majorYears = weightedYearsOfSchool(m.occupations)
                   const isExpanded = expanded[m.id]
-                  const breakEven = mode === 'breakeven'
+                  const investment = mode === 'breakeven' ? investmentForYears(majorYears) : null
+                  const breakEven = investment
                     ? calculateBreakEvenYears(investment.total, weighted, num(hsSalary))
                     : null
 
@@ -288,7 +292,7 @@ export default function CompareMajors() {
                               </span>
                             )}
                             <div className="text-xs text-muted-foreground">
-                              avg {fmt(weighted)}/yr
+                              {majorYears}yr school · {fmt(weighted)}/yr · {fmt(investment!.total)} total
                             </div>
                           </span>
                         )}
