@@ -31,6 +31,7 @@ model OccupationSubCategory {
   category_id        String
   typical_years_of_school Float?
   major_mappings     MajorOccupation[]
+  cip_mappings       CipOccupation[]
   created_at         DateTime           @default(now())
   updated_at         DateTime           @updatedAt
 
@@ -56,6 +57,27 @@ model MajorOccupation {
 
   @@unique([major_id, occupation_id])
   @@index([major_id])
+  @@index([occupation_id])
+}
+
+model CipCode {
+  id          String          @id @default(uuid())
+  code        String          @unique // 4-digit CIP, no dot, e.g. "1107"
+  title       String
+  occupations CipOccupation[]
+  created_at  DateTime        @default(now())
+  updated_at  DateTime        @updatedAt
+}
+
+model CipOccupation {
+  id            String               @id @default(uuid())
+  cip           CipCode              @relation(fields: [cip_id], references: [id])
+  cip_id        String
+  occupation    OccupationSubCategory @relation(fields: [occupation_id], references: [id])
+  occupation_id String
+
+  @@unique([cip_id, occupation_id])
+  @@index([cip_id])
   @@index([occupation_id])
 }
 
