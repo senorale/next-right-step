@@ -185,7 +185,7 @@ TOOLS = [
     },
     {
         "name": "get_school_programs",
-        "description": "Get per-program earnings at a specific school. Returns median earnings 1 year and 4 years after graduation for each program (major) offered, filtered optionally by major name. Requires a school_id from search_schools results. Use this to answer 'What do CS graduates from UF actually earn?' or to compare the same major across schools.",
+        "description": "Get per-program earnings at a specific school. Returns median earnings 1 year and 4 years after graduation for each program offered, filtered optionally by program name. Requires a school_id from search_schools results. Use this to answer 'What do CS graduates from UF actually earn?' or to compare the same program across schools.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -193,7 +193,7 @@ TOOLS = [
                     "type": "integer",
                     "description": "The school's College Scorecard ID (from search_schools results)",
                 },
-                "major_search": {
+                "program_search": {
                     "type": "string",
                     "description": "Optional: filter programs by name (e.g. 'computer', 'nursing'). Omit to get all programs with earnings data.",
                 },
@@ -221,17 +221,20 @@ TOOLS = [
 
 Database schema (PostgreSQL, all table/column names are double-quoted):
 
-"Major" (id UUID PK, name TEXT UNIQUE, created_at, updated_at)
-  Sample: id='abc-123', name='Computer Science'
-
 "OccupationCategory" (id UUID PK, name TEXT UNIQUE, occupation_code TEXT UNIQUE, created_at, updated_at)
   Sample: id='def-456', name='Computer and Mathematical Occupations', occupation_code='15-0000'
 
 "OccupationSubCategory" (id UUID PK, name TEXT, occupation_code TEXT, annual_salary FLOAT, category_id UUID FK->OccupationCategory.id, typical_years_of_school FLOAT NULL, created_at, updated_at)
   Sample: id='ghi-789', name='Software Developers', occupation_code='15-1252', annual_salary=132270.0, typical_years_of_school=4.0
 
-"MajorOccupation" (id UUID PK, major_id UUID FK->Major.id, occupation_id UUID FK->OccupationSubCategory.id, relevance FLOAT)
-  Links majors to occupations. relevance: 1.0=direct pipeline, 0.7=common path, 0.4=possible path
+"CipCode" (id UUID PK, code TEXT UNIQUE, title TEXT, created_at, updated_at)
+  Degree fields. code is a 4-digit CIP code with no dot. Sample: code='1107', title='Computer Science.'
+
+"CipOccupation" (id UUID PK, cip_id UUID FK->CipCode.id, occupation_id UUID FK->OccupationSubCategory.id)
+  Links degree fields to occupations (CIP-SOC crosswalk).
+
+"ProgramDebt" (id UUID PK, cip_id UUID FK->CipCode.id, credential_level INT, credential_label TEXT, school_type TEXT, median_debt INT, mean_debt INT NULL, sample_size INT, source TEXT, created_at, updated_at)
+  National median debt by degree field. credential_level: 1=Undergrad Cert, 2=Associate, 3=Bachelor, 5=Master, 6=Doctoral, 7=First Professional, 8=Grad/Prof Cert. school_type: public | private_nonprofit | all
 
 "TuitionMedian" (id UUID PK, cohort TEXT UNIQUE, label TEXT, sticker_annual INT NULL, net_price_annual INT NULL, cost_of_attendance_annual INT NULL, sample_size INT, source TEXT, created_at, updated_at)
   Cohorts: public_in_state, public_out_of_state, private_nonprofit, all""",
@@ -264,7 +267,7 @@ TOOL_DISPATCH = {
         args.get("max_net_price"), args.get("size"), args.get("sort_by"),
         args.get("degree_type", "bachelor"),
     ),
-    "get_school_programs": lambda args: get_school_programs(args["school_id"], args.get("major_search")),
+    "get_school_programs": lambda args: get_school_programs(args["school_id"], args.get("program_search")),
     "run_sql": lambda args: run_sql(args["query"]),
 }
 
@@ -272,10 +275,10 @@ SYSTEM_PROMPT = """You are a data-gathering agent for the "Should I Go?" college
 
 TOOLS:
 
-1. search_occupations(keyword) - Search occupations by keyword via O*NET. Returns SOC codes, bright outlook, education years, BLS salary. Use when user names a career, occupation, OR major/field of study (e.g. "computer science" returns related occupations like Software Developers).
+1. search_occupations(keyword) - Search occupations by keyword via O*NET. Returns SOC codes, bright outlook, education years, BLS salary. Use when user names a career, occupation, OR degree/field of study (e.g. "computer science" returns related occupations like Software Developers).
 2. get_tuition_medians() - National median tuition by school type (public in-state, out-of-state, private).
 3. search_schools(name, state, ownership, max_net_price, size, sort_by) - Search schools with filters. Returns graduation rate, earnings, debt, admission rate, retention rate, loan repayment. Only schools with graduation rate >= 70%.
-4. get_school_programs(school_id, major_search?) - Per-program earnings at a specific school. Requires school_id from search_schools.
+4. get_school_programs(school_id, program_search?) - Per-program earnings at a specific school. Requires school_id from search_schools.
 5. run_sql(query) - Read-only SQL for analytical questions the other tools can't answer.
 
 The user's intake_answers include a "path_type" field (one of: path1, path2, path3, path4, path5). Gather data based on their path:
@@ -297,7 +300,7 @@ User has decided on college, wants to compare schools.
 path3 - COMPARING PROGRAMS AT A SCHOOL:
 User is at or committed to a specific school, comparing programs.
 - search_schools for their school (to get school_id)
-- get_school_programs for their school, filtered by each program/major they named
+- get_school_programs for their school, filtered by each program they named
 - search_occupations for occupations linked to their programs (for bright outlook, education data, BLS salary)
 
 path4 - COMPARE CAREER TRACKS:
@@ -317,7 +320,7 @@ User has a target occupation and needs the roadmap from current position.
 RULES:
 
 - Call ALL relevant tools for the user's path in the first turn. Gather broadly.
-- When a user mentions a major or career, call search_occupations. When they name a school, call search_schools.
+- When a user mentions a degree, program, or career, call search_occupations. When they name a school, call search_schools.
 - To get program earnings, call search_schools first (for school_id), then get_school_programs.
 - If search_occupations returns no results, try broader/alternative keywords.
 - BLS caps reported salaries at $239,200/yr.
@@ -357,7 +360,8 @@ HTML RULES:
 CONTENT RULES:
 - Open with a bold 1-2 sentence personalized headline takeaway.
 - Group data into logical sections with clear headings. Order by importance to this user.
-- Highlight comparisons: which option costs least, pays most, breaks even fastest.
+- Highlight comparisons: which option costs least, pays most, pays off fastest.
+- Never use the words "major" or "break-even". Say "degree" or "program", and "payoff timeline".
 - Include a "What this means for you" sentence in each section.
 - For income-based net price data, highlight the bracket closest to the user's situation if known.
 - Footer must include this exact disclaimer:
@@ -370,7 +374,7 @@ Every report MUST include a full financial breakdown. Use these constants and fo
 
 Reference values:
 - Federal student loan interest rate: 6.53% (2026-2027 undergraduate rate)
-- High school diploma median salary: $46,748/yr (baseline for opportunity cost and break-even)
+- High school diploma median salary: $46,748/yr (default baseline for opportunity cost and payoff timeline)
 - Standard repayment term: 10 years
 
 For each career path or school option, calculate and display:
@@ -378,16 +382,16 @@ For each career path or school option, calculate and display:
 2. Opportunity cost = $46,748 x years in school (earnings foregone)
 3. Total investment = education cost + opportunity cost
 4. Monthly loan payment = standard amortization at 6.53% over 10 years
-5. Break-even point = total investment / (expected salary - $46,748). Years after graduation until the education pays for itself vs. working with only a HS diploma.
+5. Payoff timeline = total investment / (expected salary - baseline salary). Years after graduation until the education pays for itself. Baseline is $46,748 (HS diploma) unless the user gave a current salary; then use their current salary as the baseline and for opportunity cost. If expected salary <= baseline, say it does not pay off at that salary.
 
-Present as a comparison table or side-by-side cards. Include an SVG chart showing the break-even timeline.
+Present as a comparison table or side-by-side cards. Include an SVG chart showing the payoff timeline.
 
 PATH-SPECIFIC REPORT FORMAT:
 
 The user's intake includes a "path_type" field (one of: path1, path2, path3, path4, path5). Use it to structure the report:
 
 path1 (college vs vocational vs work):
-Five-row comparison table. Each row: occupation (or baseline), education required + timeline, estimated cost (tuition + opportunity cost), expected salary, break-even vs HS diploma baseline. Rows: (1) HS diploma baseline ($46,748/yr, zero cost), (2) Cashier (entry-level, no post-secondary), (3) Electrician (vocational/trade path), (4) Bachelor's degree median, (5) User's chosen occupation. SVG bar chart comparing all five.
+Five-row comparison table. Each row: occupation (or baseline), education required + timeline, estimated cost (tuition + opportunity cost), expected salary, payoff timeline vs HS diploma baseline. Rows: (1) HS diploma baseline ($46,748/yr, zero cost), (2) Cashier (entry-level, no post-secondary), (3) Electrician (vocational/trade path), (4) Bachelor's degree median, (5) User's chosen occupation. SVG bar chart comparing all five.
 
 path2 (comparing schools):
 Top 5 schools ranked by user's chosen metric. Show ONLY the metrics the user toggled in compare_metrics. Full financial analysis per school.
@@ -396,10 +400,10 @@ path3 (comparing programs at school):
 Program comparison at user's school. Each program shows: school-specific earnings (from Scorecard program data) AND national occupation salary (from BLS). Label each data point by source. Career options, demand indicators, bright outlook status from O*NET. If user is switching, side-by-side of current vs considered programs.
 
 path4 (compare career tracks):
-Side-by-side cards or table. Each occupation: education path required, timeline, estimated cost, expected salary, bright outlook status, break-even point. Use user's current_position and current_field to contextualize (e.g. credit for existing education, gap from current role).
+Side-by-side cards or table. Each occupation: education path required, timeline, estimated cost, expected salary, bright outlook status, payoff timeline vs the user's baseline. Use user's current_position and current_field to contextualize (e.g. credit for existing education, gap from current role).
 
 path5 (path to career):
-Roadmap from current position to target. Steps, timeline, education needed, estimated cost. Show gap analysis between current education and required education. If user already has relevant education, show how far along they are. End with expected salary and break-even.
+Roadmap from current position to target. Steps, timeline, education needed, estimated cost. Show gap analysis between current education and required education. If user already has relevant education, show how far along they are. End with expected salary and time to recoup vs current income.
 
 RESPOND WITH ONLY VALID JSON:
 {"summary": "1-2 sentence plain text takeaway for chat", "html": "<!DOCTYPE html>..."}
@@ -482,7 +486,7 @@ async def run_agent_stream(
     """Async generator yielding progress events then a final result.
 
     Event shapes:
-      {"event": "progress", "message": "Searching majors…"}
+      {"event": "progress", "message": "Searching occupations…"}
       {"event": "complete", "response": "...", "report_html": "...", "conversation_history": [...]}
     """
     messages = list(conversation_history) if conversation_history else []

@@ -123,23 +123,22 @@ def run_sql(query: str) -> list[dict]:
     return results
 
 
-def find_majors_with_occupations(query: str) -> list[dict]:
-    """Search majors by name and return each match with all linked occupations, salaries, and relevance."""
+def find_degrees_with_occupations(query: str) -> list[dict]:
+    """Search degrees (CIP codes) by title and return each match with all linked occupations and salaries."""
     with _connect_with_retry() as conn:
         rows = conn.execute(
             text("""
-                SELECT m.id AS major_id,
-                       m.name AS major,
+                SELECT c.code AS cip_code,
+                       c.title AS degree,
                        o.name AS occupation,
                        o.occupation_code,
                        o.annual_salary,
-                       o.typical_years_of_school,
-                       mo.relevance
-                FROM "Major" m
-                JOIN "MajorOccupation" mo ON mo.major_id = m.id
-                JOIN "OccupationSubCategory" o ON o.id = mo.occupation_id
-                WHERE m.name ILIKE :q
-                ORDER BY m.name, mo.relevance DESC
+                       o.typical_years_of_school
+                FROM "CipCode" c
+                JOIN "CipOccupation" co ON co.cip_id = c.id
+                JOIN "OccupationSubCategory" o ON o.id = co.occupation_id
+                WHERE c.title ILIKE :q
+                ORDER BY c.title, o.annual_salary DESC
             """),
             {"q": f"%{query}%"},
         )
@@ -147,19 +146,18 @@ def find_majors_with_occupations(query: str) -> list[dict]:
 
     grouped: dict[str, dict] = {}
     for row in flat:
-        major = row["major"]
-        if major not in grouped:
-            grouped[major] = {"major_id": row["major_id"], "major": major, "occupations": []}
+        cip_code = row["cip_code"]
+        if cip_code not in grouped:
+            grouped[cip_code] = {"cip_code": cip_code, "degree": row["degree"], "occupations": []}
 
         years = row["typical_years_of_school"]
         if years is None:
             years = _backfill_years(row["occupation_code"])
 
-        grouped[major]["occupations"].append({
+        grouped[cip_code]["occupations"].append({
             "occupation": row["occupation"],
             "annual_salary": float(row["annual_salary"]),
             "typical_years_of_school": float(years) if years is not None else None,
-            "relevance": float(row["relevance"]),
         })
 
     return list(grouped.values())
@@ -280,8 +278,26 @@ _SCHOOL_FIELDS = ",".join([
     "latest.earnings.10_yrs_after_entry.median",
     "latest.admissions.admission_rate.overall",
     "latest.student.retention_rate.four_year.full_time",
-    "latest.repayment.3_yr_repayment.overall",
+    # No overall 3-year repayment rate exists (3_yr_repayment.overall is a
+    # borrower count), so it is derived from the completer/noncompleter splits.
+    "latest.repayment.3_yr_repayment.completers",
+    "latest.repayment.3_yr_repayment.completers_rate",
+    "latest.repayment.3_yr_repayment.noncompleters",
+    "latest.repayment.3_yr_repayment.noncompleters_rate",
 ])
+
+
+def _repayment_rate_3yr(r: dict) -> float | None:
+    completers = _safe_float(r.get("latest.repayment.3_yr_repayment.completers"))
+    completers_rate = _safe_float(r.get("latest.repayment.3_yr_repayment.completers_rate"))
+    noncompleters = _safe_float(r.get("latest.repayment.3_yr_repayment.noncompleters"))
+    noncompleters_rate = _safe_float(r.get("latest.repayment.3_yr_repayment.noncompleters_rate"))
+    if None in (completers, completers_rate, noncompleters, noncompleters_rate):
+        return None
+    borrowers = completers + noncompleters
+    if borrowers == 0:
+        return None
+    return (completers * completers_rate + noncompleters * noncompleters_rate) / borrowers
 
 _OWNERSHIP_LABELS = {1: "Public", 2: "Private nonprofit", 3: "Private for-profit"}
 
@@ -384,7 +400,7 @@ def search_schools(
             "earnings_10yr_after_entry": earnings,
             "admission_rate": r.get("latest.admissions.admission_rate.overall"),
             "retention_rate": r.get("latest.student.retention_rate.four_year.full_time"),
-            "loan_repayment_rate_3yr": r.get("latest.repayment.3_yr_repayment.overall"),
+            "loan_repayment_rate_3yr": _repayment_rate_3yr(r),
         })
         if len(schools) >= 5:
             break
@@ -411,24 +427,25 @@ _PROGRAM_FIELDS = ",".join([
     "latest.programs.cip_4_digit.code",
     "latest.programs.cip_4_digit.title",
     "latest.programs.cip_4_digit.credential.level",
-    "latest.programs.cip_4_digit.earnings.highest.1_yr.overall_median_earnings",
-    "latest.programs.cip_4_digit.earnings.highest.4_yr.overall_median_earnings",
+    "latest.programs.cip_4_digit.earnings.1_yr.overall_median_earnings",
+    "latest.programs.cip_4_digit.earnings.4_yr.overall_median_earnings",
 ])
 
+# Scorecard field-of-study CREDLEV codes
 _CREDENTIAL_LEVELS = {
-    1: "Certificate (<1 yr)",
-    2: "Certificate (1-2 yr)",
-    3: "Associate's",
-    4: "Certificate (2-4 yr)",
-    5: "Bachelor's",
-    6: "Post-baccalaureate certificate",
-    7: "Master's",
-    8: "Doctoral",
+    1: "Undergraduate certificate",
+    2: "Associate's",
+    3: "Bachelor's",
+    4: "Post-baccalaureate certificate",
+    5: "Master's",
+    6: "Doctoral",
+    7: "First professional degree",
+    8: "Graduate/professional certificate",
 }
 
 
-def get_school_programs(school_id: int, major_search: str | None = None) -> dict:
-    """Get per-program earnings at a specific school. Optionally filter by major name.
+def get_school_programs(school_id: int, program_search: str | None = None) -> dict:
+    """Get per-program earnings at a specific school. Optionally filter by program name.
     Returns 1yr and 4yr post-graduation median earnings by program."""
     if not SCORECARD_API_KEY:
         return {"error": "College Scorecard API key not configured"}
@@ -452,14 +469,14 @@ def get_school_programs(school_id: int, major_search: str | None = None) -> dict
     programs_raw = school.get("latest.programs.cip_4_digit", []) or []
 
     programs = []
-    search_lower = major_search.lower() if major_search else None
+    search_lower = program_search.lower() if program_search else None
     for p in programs_raw:
         title = p.get("title", "")
         if search_lower and search_lower not in title.lower():
             continue
-        earnings = p.get("earnings", {}).get("highest", {})
-        earnings_1yr = earnings.get("1_yr", {}).get("overall_median_earnings")
-        earnings_4yr = earnings.get("4_yr", {}).get("overall_median_earnings")
+        earnings = p.get("earnings") or {}
+        earnings_1yr = (earnings.get("1_yr") or {}).get("overall_median_earnings")
+        earnings_4yr = (earnings.get("4_yr") or {}).get("overall_median_earnings")
         if earnings_1yr is None and earnings_4yr is None:
             continue
         cred_level = p.get("credential", {}).get("level")
