@@ -21,7 +21,7 @@ export default function LandingPage() {
           >
             <Mountain className="h-10 w-10 text-muted-foreground group-hover:text-primary transition-colors" />
             <div className="space-y-1">
-              <span className="text-lg font-semibold">Guided hike</span>
+              <span className="text-lg font-semibold">Guided experience</span>
               <p className="text-sm text-muted-foreground">
                 Tell our AI counselor about your situation and get a personalized report.
               </p>
@@ -34,9 +34,9 @@ export default function LandingPage() {
           >
             <Compass className="h-10 w-10 text-muted-foreground group-hover:text-primary transition-colors" />
             <div className="space-y-1">
-              <span className="text-lg font-semibold">Compass</span>
+              <span className="text-lg font-semibold">Explore on your own</span>
               <p className="text-sm text-muted-foreground">
-                Explore on your own. Compare schools, programs, and careers at your own pace.
+                Compare schools, programs, and careers at your own pace.
               </p>
             </div>
           </Link>
