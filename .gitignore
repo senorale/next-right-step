@@ -38,7 +38,11 @@ next-env.d.ts
 
 # Large source data (download from https://collegescorecard.ed.gov/data/)
 data/Most-Recent-Cohorts-Institution.csv
+data/Most-Recent-Cohorts-Field-of-Study.csv
 api/venv/
 __pycache__/
 evals/results/
 .ai-artifacts/
+
+# Ephemeral AI working files
+.ai-workspace/

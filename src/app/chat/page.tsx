@@ -7,280 +7,312 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { linkify } from '@/app/components/chat/linkify'
 
+interface IntakeOption {
+  value: string
+  label: string
+}
+
 interface IntakeStep {
   key: string
   question: string
   subtitle: string
-  options?: string[]
+  options?: (string | IntakeOption)[]
+  multiSelect?: boolean
   placeholder: string
 }
 
-const SEGMENT_STEP: IntakeStep = {
-  key: 'segment',
-  question: "Which best describes you?",
-  subtitle: "This helps me give you the right advice.",
+function optionValue(opt: string | IntakeOption): string {
+  return typeof opt === 'string' ? opt : opt.value
+}
+
+function optionLabel(opt: string | IntakeOption): string {
+  return typeof opt === 'string' ? opt : opt.label
+}
+
+const PATH_TYPE_STEP: IntakeStep = {
+  key: 'path_type',
+  question: "Which of these best describes you?",
+  subtitle: "This helps me give you the right information.",
   options: [
-    "I'm considering whether to go to college",
-    "I'm in college, picking or changing my major",
-    "Not in school, exploring careers",
+    { value: 'path1', label: "I'm deciding between college, a trade, or working right away" },
+    { value: 'path2', label: "I've decided on college, comparing schools" },
+    { value: 'path3', label: "I've decided on a school, comparing programs" },
+    { value: 'path4', label: "I want to compare a few different career paths" },
+    { value: 'path5', label: "I have a career in mind and need to know how to get there" },
   ],
   placeholder: "",
 }
 
-const SCHOOL_APPROACH_STEP: IntakeStep = {
-  key: 'school_approach',
-  question: "Do you have specific schools in mind?",
-  subtitle: "I can look up real costs and outcomes for any school.",
+// Path 1: College vs vocational vs working
+const DATA_SOURCE_STEP: IntakeStep = {
+  key: 'data_source',
+  question: "Do you have specific numbers to work with, or should I use national averages?",
+  subtitle: "If you have tuition quotes or salary offers, I can use those instead of medians.",
   options: [
-    "Yes, I have schools I want to compare",
-    "I want to explore schools in a specific state",
-    "No, just give me general cost info",
+    { value: 'specific', label: "I have specific info (tuition quotes, salary offers, etc.)" },
+    { value: 'medians', label: "Use national medians" },
   ],
-  placeholder: "Or tell me about your school plans...",
+  placeholder: "",
+}
+
+const SPECIFIC_NUMBERS_STEP: IntakeStep = {
+  key: 'specific_numbers',
+  question: "What numbers do you have?",
+  subtitle: "Share any tuition quotes, salary offers, or cost estimates you've gathered.",
+  placeholder: "e.g. tuition: $15,000/yr, starting salary offer: $55,000...",
+}
+
+const OCCUPATION_STEP: IntakeStep = {
+  key: 'occupation',
+  question: "What occupation are you interested in?",
+  subtitle: "I'll compare this career path against common benchmarks.",
+  placeholder: "e.g. pharmacist, software developer, nurse...",
+}
+
+// Path 2: Comparing schools
+const HAS_SPECIFIC_SCHOOLS_STEP: IntakeStep = {
+  key: 'has_specific_schools',
+  question: "Do you have specific schools in mind?",
+  subtitle: "I can compare up to 5 schools side by side.",
+  options: [
+    { value: 'yes', label: "Yes, I have schools I want to compare" },
+    { value: 'no', label: "No, help me find schools" },
+  ],
+  placeholder: "",
 }
 
 const TARGET_SCHOOLS_STEP: IntakeStep = {
   key: 'target_schools',
   question: "Which schools are you considering?",
   subtitle: "I'll pull up tuition, graduation rates, debt, and earnings for each one.",
-  placeholder: "e.g. University of Florida, Georgia Tech, NYU...",
+  placeholder: "e.g. University of Florida, Georgia Tech, NYU (up to 5)...",
 }
 
-const TARGET_STATE_STEP: IntakeStep = {
-  key: 'target_state',
-  question: "Which state?",
-  subtitle: "I'll show you schools there with costs and outcomes.",
+const TARGET_LOCATION_STEP: IntakeStep = {
+  key: 'target_location',
+  question: "What state(s) or city/cities are you looking at?",
+  subtitle: "I'll find top schools in those areas. Enter at least one.",
   placeholder: "e.g. Florida, California, New York...",
 }
 
-const INTERESTS_STEP: IntakeStep = {
-  key: 'interests',
-  question: "What fields interest you?",
-  subtitle: "Majors, careers, industries, or subjects you enjoy.",
-  placeholder: "e.g. computer science, nursing, business, engineering...",
+const COMPARE_METRICS_STEP: IntakeStep = {
+  key: 'compare_metrics',
+  question: "What do you want to compare?",
+  subtitle: "All selected by default. Deselect any you don't need.",
+  options: [
+    "Earnings after graduation",
+    "Graduation rate",
+    "Net price / cost",
+    "Debt at graduation",
+    "Admission rate",
+    "Retention rate",
+    "Loan repayment rate",
+  ],
+  multiSelect: true,
+  placeholder: "",
 }
 
-const CURRENT_MAJOR_STEP: IntakeStep = {
-  key: 'current_major',
-  question: "What's your current major?",
-  subtitle: "I'll look up career outcomes for your field.",
-  placeholder: "e.g. biology, English, mechanical engineering...",
+// Path 3: Comparing programs at a school
+const SCHOOL_NAME_STEP: IntakeStep = {
+  key: 'school_name',
+  question: "What school are you at or committed to?",
+  subtitle: "I'll pull program-level earnings and career data for this school.",
+  placeholder: "e.g. University of Florida, MIT, Georgia Tech...",
 }
 
-const CHANGE_REASON_STEP: IntakeStep = {
-  key: 'change_reason',
+const SCHOOL_SITUATION_STEP: IntakeStep = {
+  key: 'school_situation',
+  question: "What's your situation?",
+  subtitle: "This shapes what data I focus on.",
+  options: [
+    { value: 'deciding', label: "Deciding between programs" },
+    { value: 'current', label: "Already in a program, want to see where it leads" },
+    { value: 'switching', label: "Thinking about switching programs" },
+  ],
+  placeholder: "",
+}
+
+const PROGRAMS_STEP: IntakeStep = {
+  key: 'programs',
+  question: "What program(s) are you considering or currently in?",
+  subtitle: "List as many as you'd like, or say 'not sure' to see top programs.",
+  placeholder: "e.g. computer science, biology, business...",
+}
+
+const SWITCH_REASON_STEP: IntakeStep = {
+  key: 'switch_reason',
   question: "What's driving the change?",
   subtitle: "This helps me suggest the right alternatives.",
   options: [
-    "Not enjoying my current major",
-    "Worried about job prospects after graduation",
+    "Not enjoying it",
+    "Worried about job prospects",
     "Want higher earning potential",
-    "Considering dropping out entirely",
-  ],
-  placeholder: "Or explain in your own words...",
-}
-
-const HAS_DEGREE_STEP: IntakeStep = {
-  key: 'has_degree',
-  question: "Do you have a college degree?",
-  subtitle: "This shapes what data I can pull for you.",
-  options: [
-    "Yes",
-    "No, I never went to college",
-    "Some college, no degree",
+    "Considering dropping out",
   ],
   placeholder: "",
 }
 
-const MAJOR_STUDIED_STEP: IntakeStep = {
-  key: 'major_studied',
-  question: "What did you major in?",
-  subtitle: "I'll pull up salary data and career paths for your degree.",
-  placeholder: "e.g. psychology, finance, computer science...",
-}
-
-const CAREER_DIRECTION_STEP: IntakeStep = {
-  key: 'career_direction',
-  question: "Are you looking at careers related to your major?",
-  subtitle: "This helps me know whether to focus on your degree's paths or explore new ones.",
+const PROGRAM_PRIORITY_STEP: IntakeStep = {
+  key: 'program_priority',
+  question: "What matters most?",
+  subtitle: "I'll weight the analysis toward this.",
   options: [
-    "Yes, careers in my field",
-    "No, I want to explore something different",
-    "Not sure, show me both",
+    "Earning potential",
+    "Many career options",
+    "Job demand",
   ],
   placeholder: "",
 }
 
-const PRIORITY_STEP: IntakeStep = {
-  key: 'priority',
-  question: "What matters most to you?",
-  subtitle: "Pick what drives your decision, or tell me in your own words.",
-  options: [
-    "Earning potential and salary",
-    "Many career options from one major",
-    "Minimizing debt",
-    "Finishing school quickly",
-  ],
-  placeholder: "Or tell me what matters most...",
+// Path 4: Compare career tracks
+const CAREERS_TO_COMPARE_STEP: IntakeStep = {
+  key: 'careers_to_compare',
+  question: "What careers or fields do you want to compare?",
+  subtitle: "List two or more, separated by commas.",
+  placeholder: "e.g. pharmacist, software developer, nurse practitioner...",
 }
 
-const CAREER_PRIORITY_STEP: IntakeStep = {
-  key: 'career_priority',
-  question: "What matters most to you right now?",
-  subtitle: "This shapes what I focus on.",
-  options: [
-    "Highest paying careers I can reach",
-    "Careers I can switch to without more school",
-    "Whether going back to school is worth it",
-  ],
-  placeholder: "Or tell me what matters most...",
+// Path 5: Path to a specific career
+const TARGET_CAREER_STEP: IntakeStep = {
+  key: 'target_career',
+  question: "What career are you interested in?",
+  subtitle: "I'll map out the full path to get there.",
+  placeholder: "e.g. pharmacist, data scientist, electrician...",
 }
 
-const SCHOOL_TYPE_STEP: IntakeStep = {
-  key: 'school_type',
-  question: "What type of school?",
-  subtitle: "This narrows the search to schools that fit.",
+const CURRENT_POSITION_STEP: IntakeStep = {
+  key: 'current_position',
+  question: "Where are you now?",
+  subtitle: "This determines how far you need to go.",
   options: [
-    "Public universities",
-    "Private nonprofit",
-    "Either, show me both",
+    { value: 'high_school', label: "High school" },
+    { value: 'in_college', label: "In college" },
+    { value: 'has_degree', label: "Have a degree" },
+    { value: 'working', label: "Working" },
+    { value: 'no_degree', label: "Not in school, no degree" },
   ],
   placeholder: "",
 }
 
-const BUDGET_STEP: IntakeStep = {
-  key: 'budget',
-  question: "What's your annual budget for tuition?",
-  subtitle: "I'll filter out schools that cost more than this after financial aid.",
-  options: [
-    "Under $10,000/yr",
-    "Under $20,000/yr",
-    "Under $40,000/yr",
-    "No limit, show me everything",
-  ],
-  placeholder: "Or enter a specific amount...",
+function getCurrentFieldStep(answers: Record<string, string>): IntakeStep | null {
+  const pos = answers.current_position ?? ''
+  if (pos === 'in_college') {
+    return {
+      key: 'current_field',
+      question: "What are you studying?",
+      subtitle: "I'll factor in your current progress.",
+      placeholder: "e.g. biology, computer science, undeclared...",
+    }
+  }
+  if (pos === 'has_degree') {
+    return {
+      key: 'current_field',
+      question: "What's your degree in?",
+      subtitle: "I'll see how far along you already are.",
+      placeholder: "e.g. psychology, business, engineering...",
+    }
+  }
+  if (pos === 'working') {
+    return {
+      key: 'current_field',
+      question: "What do you do?",
+      subtitle: "I'll compare your current role to your target.",
+      placeholder: "e.g. retail manager, medical assistant, IT support...",
+    }
+  }
+  return null
 }
 
-const SCHOOL_SIZE_STEP: IntakeStep = {
-  key: 'school_size',
-  question: "What size school do you prefer?",
-  subtitle: "Student body size affects class sizes, campus feel, and resources.",
-  options: [
-    "Small (under 5,000 students)",
-    "Medium (5,000–15,000)",
-    "Large (15,000+)",
-    "No preference",
-  ],
-  placeholder: "",
+function getRankByStep(answers: Record<string, string>): IntakeStep {
+  const metrics = (answers.compare_metrics ?? '').split('|').filter(Boolean)
+  return {
+    key: 'rank_by',
+    question: "Rank schools by which of those?",
+    subtitle: "Schools will be sorted by this metric first.",
+    options: metrics,
+    placeholder: "",
+  }
 }
 
-const SORT_PREFERENCE_STEP: IntakeStep = {
-  key: 'sort_preference',
-  question: "How should I rank schools for you?",
-  subtitle: "Pick the metric that matters most.",
-  options: [
-    "Highest earnings after graduation",
-    "Highest graduation rate",
-    "Lowest net price",
-    "Lowest student debt",
-  ],
-  placeholder: "",
-}
-
-const REPORT_DEPTH_STEP: IntakeStep = {
-  key: 'report_depth',
-  question: "How deep should I go?",
-  subtitle: "I can give you a quick snapshot or a full financial breakdown.",
-  options: [
-    "Just the numbers: salaries and career paths",
-    "The whole picture: loans, total cost, break-even, and payoff timeline",
-  ],
-  placeholder: "",
-}
-
-const TRADE_INTEREST_STEP: IntakeStep = {
-  key: 'trade_interest',
-  question: "Are you considering alternatives to college?",
-  subtitle: "Trades and apprenticeships are valid paths worth comparing.",
-  options: [
-    "Yes, interested in trades or apprenticeships",
-    "Maybe, I want to compare all options",
-    "No, just want to see if a degree is worth the cost",
-  ],
-  placeholder: "Or tell me what you're thinking...",
+function getPathKey(answers: Record<string, string>): string {
+  return answers.path_type ?? ''
 }
 
 function getNextStep(answers: Record<string, string>): IntakeStep | null {
   const keys = Object.keys(answers)
-  const segment = answers.segment?.toLowerCase() ?? ''
 
-  if (!keys.includes('segment')) return SEGMENT_STEP
+  if (!keys.includes('path_type')) return PATH_TYPE_STEP
 
-  const isConsidering = segment.includes('considering whether')
-  const isInCollege = segment.includes('in college')
-  const isNotInSchool = segment.includes('not in school')
+  const path = getPathKey(answers)
 
-  if (isConsidering) {
-    if (!keys.includes('school_approach')) return SCHOOL_APPROACH_STEP
-    const approach = answers.school_approach?.toLowerCase() ?? ''
-    if (approach.includes('schools i want to compare') && !keys.includes('target_schools')) return TARGET_SCHOOLS_STEP
-    if (approach.includes('specific state') && !keys.includes('target_state')) return TARGET_STATE_STEP
-    const wantsStateSearch = approach.includes('specific state')
-    if (wantsStateSearch && !keys.includes('school_type')) return SCHOOL_TYPE_STEP
-    if (wantsStateSearch && !keys.includes('school_size')) return SCHOOL_SIZE_STEP
-    if (wantsStateSearch && !keys.includes('budget')) return BUDGET_STEP
-    if (wantsStateSearch && !keys.includes('sort_preference')) return SORT_PREFERENCE_STEP
-    if (!keys.includes('interests')) return INTERESTS_STEP
-    if (!keys.includes('trade_interest')) return TRADE_INTEREST_STEP
-    if (!keys.includes('report_depth')) return REPORT_DEPTH_STEP
-    if (!keys.includes('priority')) return PRIORITY_STEP
+  if (path === 'path1') {
+    if (!keys.includes('data_source')) return DATA_SOURCE_STEP
+    if (answers.data_source === 'specific' && !keys.includes('specific_numbers')) return SPECIFIC_NUMBERS_STEP
+    if (!keys.includes('occupation')) return OCCUPATION_STEP
     return null
   }
 
-  if (isInCollege) {
-    if (!keys.includes('current_major')) return CURRENT_MAJOR_STEP
-    if (!keys.includes('change_reason')) return CHANGE_REASON_STEP
-    const isDroppingOut = (answers.change_reason ?? '').toLowerCase().includes('dropping out')
-    if (!isDroppingOut && !keys.includes('interests')) return INTERESTS_STEP
-    if (!keys.includes('report_depth')) return REPORT_DEPTH_STEP
-    if (!keys.includes('priority')) return PRIORITY_STEP
+  if (path === 'path2') {
+    if (!keys.includes('has_specific_schools')) return HAS_SPECIFIC_SCHOOLS_STEP
+    const hasSchools = answers.has_specific_schools === 'yes'
+    if (hasSchools && !keys.includes('target_schools')) return TARGET_SCHOOLS_STEP
+    if (!hasSchools && !keys.includes('target_location')) return TARGET_LOCATION_STEP
+    if (!keys.includes('compare_metrics')) return COMPARE_METRICS_STEP
+    const metrics = (answers.compare_metrics ?? '').split('|').filter(Boolean)
+    if (metrics.length > 1 && !keys.includes('rank_by')) return getRankByStep(answers)
     return null
   }
 
-  if (isNotInSchool) {
-    if (!keys.includes('has_degree')) return HAS_DEGREE_STEP
-    const hasDegree = answers.has_degree?.toLowerCase().startsWith('yes')
-    if (hasDegree && !keys.includes('major_studied')) return MAJOR_STUDIED_STEP
-    if (hasDegree && !keys.includes('career_direction')) return CAREER_DIRECTION_STEP
-    const stayingInField = answers.career_direction?.toLowerCase().includes('in my field')
-    if (!stayingInField && !keys.includes('interests')) return INTERESTS_STEP
-    if (!keys.includes('career_priority')) return CAREER_PRIORITY_STEP
+  if (path === 'path3') {
+    if (!keys.includes('school_name')) return SCHOOL_NAME_STEP
+    if (!keys.includes('school_situation')) return SCHOOL_SITUATION_STEP
+    if (!keys.includes('programs')) return PROGRAMS_STEP
+    const switching = answers.school_situation === 'switching'
+    if (switching && !keys.includes('switch_reason')) return SWITCH_REASON_STEP
+    if (!keys.includes('program_priority')) return PROGRAM_PRIORITY_STEP
     return null
   }
 
-  if (!keys.includes('interests')) return INTERESTS_STEP
-  if (!keys.includes('priority')) return PRIORITY_STEP
+  if (path === 'path4') {
+    if (!keys.includes('careers_to_compare')) return CAREERS_TO_COMPARE_STEP
+    if (!keys.includes('current_position')) return CURRENT_POSITION_STEP
+    const fieldStep = getCurrentFieldStep(answers)
+    if (fieldStep && !keys.includes('current_field')) return fieldStep
+    return null
+  }
+
+  if (path === 'path5') {
+    if (!keys.includes('target_career')) return TARGET_CAREER_STEP
+    if (!keys.includes('current_position')) return CURRENT_POSITION_STEP
+    const fieldStep = getCurrentFieldStep(answers)
+    if (fieldStep && !keys.includes('current_field')) return fieldStep
+    return null
+  }
+
   return null
 }
 
 function estimateTotalSteps(answers: Record<string, string>): number {
-  const segment = answers.segment?.toLowerCase() ?? ''
-  if (segment.includes('in college')) {
-    const isDroppingOut = (answers.change_reason ?? '').toLowerCase().includes('dropping out')
-    return isDroppingOut ? 5 : 6
+  const path = getPathKey(answers)
+  if (path === 'path1') {
+    return answers.data_source === 'specific' ? 4 : 3
   }
-  if (segment.includes('not in school')) {
-    const hasDegree = answers.has_degree?.toLowerCase().startsWith('yes')
-    if (!hasDegree) return 4
-    const stayingInField = answers.career_direction?.toLowerCase().includes('in my field')
-    return stayingInField ? 5 : 6
+  if (path === 'path2') {
+    const metrics = (answers.compare_metrics ?? '').split('|').filter(Boolean)
+    return metrics.length > 1 ? 5 : 4
   }
-
-  if (segment.includes('considering whether')) {
-    const approach = answers.school_approach?.toLowerCase() ?? ''
-    if (approach.includes('general')) return 6
-    if (approach.includes('specific state')) return 11
-    return 7
+  if (path === 'path3') {
+    return answers.school_situation === 'switching' ? 6 : 5
+  }
+  if (path === 'path4') {
+    if (!answers.current_position) return 4
+    const fieldStep = getCurrentFieldStep(answers)
+    return fieldStep ? 4 : 3
+  }
+  if (path === 'path5') {
+    if (!answers.current_position) return 4
+    const fieldStep = getCurrentFieldStep(answers)
+    return fieldStep ? 4 : 3
   }
   return 5
 }
@@ -289,6 +321,7 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [history, setHistory] = useState<string[]>([])
   const [selected, setSelected] = useState('')
+  const [selections, setSelections] = useState<string[]>([])
   const [input, setInput] = useState('')
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -303,11 +336,23 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
 
   useEffect(() => {
     if (!current) return
-    setSelected(answers[current.key] ?? '')
-    setInput(answers[current.key] ?? '')
-  }, [current, answers])
+    const saved = answers[current.key] ?? ''
+    if (current.multiSelect) {
+      const allValues = (current.options ?? []).map(optionValue)
+      setSelections(saved ? saved.split('|') : allValues)
+      setSelected('')
+    } else {
+      setSelected(saved)
+      setSelections([])
+    }
+    setInput(saved)
+  }, [current?.key])
 
-  const pending = current?.options ? selected : input.trim()
+  const pending = current?.multiSelect
+    ? (selections.length > 0 ? selections.join('|') : '')
+    : current?.options
+      ? selected
+      : input.trim()
 
   function advance() {
     if (!pending || !current) return
@@ -315,6 +360,7 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
     setHistory((prev) => [...prev, current.key])
     setAnswers(next)
     setSelected('')
+    setSelections([])
     setInput('')
     if (!getNextStep(next)) {
       onComplete(next)
@@ -331,7 +377,16 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
       return next
     })
     setSelected('')
+    setSelections([])
     setInput('')
+  }
+
+  function toggleSelection(option: string) {
+    setSelections((prev) =>
+      prev.includes(option)
+        ? prev.filter((s) => s !== option)
+        : [...prev, option]
+    )
   }
 
   if (!current) return null
@@ -369,20 +424,33 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
 
           {current.options && (
             <div className="flex flex-wrap justify-center gap-2">
-              {current.options.map((option) => (
-                <button
-                  key={option}
-                  onClick={() => setSelected(selected === option ? '' : option)}
-                  className={cn(
-                    'rounded-full border-2 px-4 py-2 text-sm transition-all',
-                    selected === option
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border hover:border-primary hover:bg-primary/5'
-                  )}
-                >
-                  {option}
-                </button>
-              ))}
+              {current.options.map((option) => {
+                const value = optionValue(option)
+                const label = optionLabel(option)
+                const isSelected = current.multiSelect
+                  ? selections.includes(value)
+                  : selected === value
+                return (
+                  <button
+                    key={value}
+                    onClick={() => {
+                      if (current.multiSelect) {
+                        toggleSelection(value)
+                      } else {
+                        setSelected(selected === value ? '' : value)
+                      }
+                    }}
+                    className={cn(
+                      'rounded-full border-2 px-4 py-2 text-sm transition-all',
+                      isSelected
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-border hover:border-primary hover:bg-primary/5'
+                    )}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
             </div>
           )}
 
@@ -394,6 +462,7 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
                 onChange={(e) => {
                   setInput(e.target.value)
                   setSelected('')
+                  setSelections([])
                   e.target.style.height = 'auto'
                   e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`
                 }}
@@ -742,31 +811,107 @@ function ChatView({ initialPrompt, intakeAnswers }: { initialPrompt: string; int
   )
 }
 
+const PATH_LABELS: Record<string, string> = {
+  path1: 'College vs Vocational vs Working Now',
+  path2: 'Comparing Schools',
+  path3: 'Comparing Programs at a School',
+  path4: 'Compare Career Tracks',
+  path5: 'Path to a Specific Career',
+}
+
+const METRIC_TO_SORT: Record<string, string> = {
+  'Earnings after graduation': 'earnings',
+  'Graduation rate': 'graduation_rate',
+  'Net price / cost': 'net_price',
+  'Debt at graduation': 'median_debt',
+  'Admission rate': 'admission_rate',
+  'Retention rate': 'retention_rate',
+  'Loan repayment rate': 'loan_repayment',
+}
+
 function buildPrompt(answers: Record<string, string>): string {
-  const lines = ["Here's my situation:"]
+  const path = getPathKey(answers)
+  const pathLabel = PATH_LABELS[path] ?? 'General'
+  const lines = [`Decision point: ${pathLabel}`, '', "Here's my situation:"]
 
-  lines.push(`- Where I am: ${answers.segment}`)
+  if (path === 'path1') {
+    lines.push(`- I'm deciding between college, a trade, or working right away`)
+    if (answers.data_source === 'specific') {
+      lines.push('- Data preference: has specific numbers (tuition quotes, salary offers)')
+    } else if (answers.data_source === 'medians') {
+      lines.push('- Data preference: use national medians')
+    }
+    if (answers.specific_numbers) lines.push(`- My specific numbers: ${answers.specific_numbers}`)
+    if (answers.occupation) lines.push(`- Occupation I'm interested in: ${answers.occupation}`)
+    lines.push('')
+    lines.push('Compare these five options side by side: (1) HS diploma baseline, (2) Cashier, (3) Electrician, (4) Bachelor\'s degree median, (5) my chosen occupation. Include full financial analysis with payoff timeline.')
+  }
 
-  if (answers.school_approach) lines.push(`- School plans: ${answers.school_approach}`)
-  if (answers.target_schools) lines.push(`- Schools I'm considering: ${answers.target_schools}`)
-  if (answers.target_state) lines.push(`- State I'm looking at: ${answers.target_state}`)
-  if (answers.has_degree) lines.push(`- Have a degree: ${answers.has_degree}`)
-  if (answers.current_major) lines.push(`- Current major: ${answers.current_major}`)
-  if (answers.change_reason) lines.push(`- Reason for change: ${answers.change_reason}`)
-  if (answers.major_studied) lines.push(`- Major I studied: ${answers.major_studied}`)
-  if (answers.career_direction) lines.push(`- Career direction: ${answers.career_direction}`)
-  if (answers.school_type) lines.push(`- School type preference: ${answers.school_type}`)
-  if (answers.school_size) lines.push(`- School size preference: ${answers.school_size}`)
-  if (answers.budget) lines.push(`- Budget: ${answers.budget}`)
-  if (answers.sort_preference) lines.push(`- Rank schools by: ${answers.sort_preference}`)
-  if (answers.trade_interest) lines.push(`- College alternatives: ${answers.trade_interest}`)
-  if (answers.report_depth) lines.push(`- Report depth: ${answers.report_depth}`)
-  if (answers.interests) lines.push(`- Fields that interest me: ${answers.interests}`)
-  if (answers.priority) lines.push(`- What matters most: ${answers.priority}`)
-  if (answers.career_priority) lines.push(`- Career priority: ${answers.career_priority}`)
+  if (path === 'path2') {
+    lines.push(`- I've decided on college, comparing schools`)
+    if (answers.target_schools) lines.push(`- Schools to compare: ${answers.target_schools}`)
+    if (answers.target_location) lines.push(`- Location: ${answers.target_location}`)
+    if (answers.compare_metrics) {
+      const metrics = answers.compare_metrics.split('|')
+      lines.push(`- Compare on: ${metrics.join(', ')}`)
+    }
+    const rankMetric = answers.rank_by ?? (answers.compare_metrics?.split('|').filter(Boolean).length === 1 ? answers.compare_metrics : '')
+    if (rankMetric) {
+      lines.push(`- Rank by: ${rankMetric}`)
+      const sortKey = METRIC_TO_SORT[rankMetric]
+      if (sortKey) lines.push(`- sort_by: ${sortKey}`)
+    }
+    lines.push('')
+    lines.push('Show me up to 5 schools ranked by my chosen metric, with only the metrics I selected. Include full financial analysis.')
+  }
 
-  lines.push('')
-  lines.push('Based on all of this, give me personalized advice.')
+  if (path === 'path3') {
+    lines.push(`- I'm at or committed to a specific school, comparing programs`)
+    if (answers.school_name) lines.push(`- School: ${answers.school_name}`)
+    if (answers.school_situation) {
+      const situationText: Record<string, string> = {
+        deciding: 'Deciding between programs',
+        current: 'Already in a program, exploring outcomes',
+        switching: 'Thinking about switching programs',
+      }
+      lines.push(`- Situation: ${situationText[answers.school_situation] ?? answers.school_situation}`)
+    }
+    if (answers.programs) lines.push(`- Programs: ${answers.programs}`)
+    if (answers.switch_reason) lines.push(`- Reason for switching: ${answers.switch_reason}`)
+    if (answers.program_priority) lines.push(`- What matters most: ${answers.program_priority}`)
+    lines.push('')
+    lines.push('Compare programs at my school. Show school-specific earnings (Scorecard) and national occupation salary (BLS) for each. Include career options, demand, and bright outlook. Full financial analysis.')
+  }
+
+  if (path === 'path4') {
+    lines.push(`- I want to compare career paths side by side`)
+    if (answers.careers_to_compare) lines.push(`- Careers to compare: ${answers.careers_to_compare}`)
+    if (answers.current_position) {
+      const posText: Record<string, string> = {
+        high_school: 'In high school', in_college: 'In college', has_degree: 'Has a degree',
+        working: 'Currently working', no_degree: 'Not in school, no degree',
+      }
+      lines.push(`- Current position: ${posText[answers.current_position] ?? answers.current_position}`)
+    }
+    if (answers.current_field) lines.push(`- Current field/study: ${answers.current_field}`)
+    lines.push('')
+    lines.push('Compare each career path: education required, timeline, cost, salary, bright outlook, payoff timeline. Full financial analysis for all paths.')
+  }
+
+  if (path === 'path5') {
+    lines.push(`- I have a specific career in mind`)
+    if (answers.target_career) lines.push(`- Target career: ${answers.target_career}`)
+    if (answers.current_position) {
+      const posText: Record<string, string> = {
+        high_school: 'In high school', in_college: 'In college', has_degree: 'Has a degree',
+        working: 'Currently working', no_degree: 'Not in school, no degree',
+      }
+      lines.push(`- Current position: ${posText[answers.current_position] ?? answers.current_position}`)
+    }
+    if (answers.current_field) lines.push(`- Current field/study: ${answers.current_field}`)
+    lines.push('')
+    lines.push('Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected salary, time to recoup. Show gap analysis if I have relevant education.')
+  }
 
   return lines.join('\n')
 }

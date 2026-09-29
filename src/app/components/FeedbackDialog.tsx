@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 const CATEGORIES: Record<string, string[]> = {
-  app: ['Data accuracy', 'Missing school or major', 'UI/design', 'Feature request', 'Other'],
+  app: ['Data accuracy', 'Missing school or program', 'UI/design', 'Feature request', 'Other'],
   agent: ['Response quality', 'Missing or wrong data', 'Too slow', 'Confusing flow', 'Other'],
 }
 

@@ -14,25 +14,26 @@ datasource db {
 }
 
 model OccupationCategory {
-  id                       String                  @id @default(uuid())
-  name                     String                  @unique
-  occupation_code          String                  @unique
+  id                        String                  @id @default(uuid())
+  name                      String                  @unique
+  occupation_code           String                  @unique
   occupation_sub_categories OccupationSubCategory[]
-  created_at              DateTime                @default(now())
-  updated_at              DateTime                @updatedAt
+  created_at                DateTime                @default(now())
+  updated_at                DateTime                @updatedAt
 }
 
 model OccupationSubCategory {
-  id                  String             @id @default(uuid())
-  name                String
-  occupation_code     String
-  annual_salary       Float
-  category           OccupationCategory @relation(fields: [category_id], references: [id])
-  category_id        String
+  id                      String             @id @default(uuid())
+  name                    String
+  occupation_code         String
+  annual_salary           Float
+  category                OccupationCategory @relation(fields: [category_id], references: [id])
+  category_id             String
   typical_years_of_school Float?
-  major_mappings     MajorOccupation[]
-  created_at         DateTime           @default(now())
-  updated_at         DateTime           @updatedAt
+  major_mappings          MajorOccupation[]
+  cip_mappings            CipOccupation[]
+  created_at              DateTime           @default(now())
+  updated_at              DateTime           @updatedAt
 
   @@unique([category_id, occupation_code])
   @@index([occupation_code])
@@ -47,16 +48,59 @@ model Major {
 }
 
 model MajorOccupation {
-  id            String               @id @default(uuid())
-  major         Major                @relation(fields: [major_id], references: [id])
+  id            String                @id @default(uuid())
+  major         Major                 @relation(fields: [major_id], references: [id])
   major_id      String
   occupation    OccupationSubCategory @relation(fields: [occupation_id], references: [id])
   occupation_id String
-  relevance     Float                // 0-1, how likely this major leads to this occupation
+  relevance     Float // 0-1, how likely this major leads to this occupation
 
   @@unique([major_id, occupation_id])
   @@index([major_id])
   @@index([occupation_id])
+}
+
+model CipCode {
+  id          String          @id @default(uuid())
+  code        String          @unique // 4-digit CIP, no dot, e.g. "1107"
+  title       String
+  occupations CipOccupation[]
+  debt        ProgramDebt[]
+  created_at  DateTime        @default(now())
+  updated_at  DateTime        @updatedAt
+}
+
+model CipOccupation {
+  id            String                @id @default(uuid())
+  cip           CipCode               @relation(fields: [cip_id], references: [id])
+  cip_id        String
+  occupation    OccupationSubCategory @relation(fields: [occupation_id], references: [id])
+  occupation_id String
+
+  @@unique([cip_id, occupation_id])
+  @@index([cip_id])
+  @@index([occupation_id])
+}
+
+// Median student debt at completion, aggregated across schools from the
+// College Scorecard field-of-study data. One row per CIP + credential level
+// + school type combination.
+model ProgramDebt {
+  id               String   @id @default(uuid())
+  cip              CipCode  @relation(fields: [cip_id], references: [id])
+  cip_id           String
+  credential_level Int // 1=Undergrad Cert, 2=Associate, 3=Bachelor, 5=Master, 6=Doctoral, 7=First Professional, 8=Grad/Prof Cert
+  credential_label String // e.g. "Bachelor's Degree"
+  school_type      String // public | private_nonprofit | all
+  median_debt      Int
+  mean_debt        Int?
+  sample_size      Int // number of schools reporting
+  source           String   @default("College Scorecard: Most-Recent-Cohorts-Field-of-Study")
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@unique([cip_id, credential_level, school_type])
+  @@index([cip_id])
 }
 
 // Median cost of attendance figures per school cohort, sourced from the
@@ -64,14 +108,66 @@ model MajorOccupation {
 // multiplies by years in school to get a total. Public out-of-state has no
 // net price because the Scorecard only reports net price for in-state students.
 model TuitionMedian {
-  id                       String   @id @default(uuid())
-  cohort                   String   @unique // public_in_state | public_out_of_state | private_nonprofit | all
-  label                    String            // human label e.g. "Public (in-state)"
-  sticker_annual           Int?              // median tuition + fees, before aid
-  net_price_annual         Int?              // median cost of attendance minus grant aid
-  cost_of_attendance_annual Int?             // median full cost incl. living, before aid
-  sample_size              Int               // number of schools in the median
-  source                   String   @default("College Scorecard: Most-Recent-Cohorts-Institution")
-  created_at               DateTime @default(now())
-  updated_at               DateTime @updatedAt
+  id                        String   @id @default(uuid())
+  cohort                    String   @unique // public_in_state | public_out_of_state | private_nonprofit | all
+  label                     String // human label e.g. "Public (in-state)"
+  sticker_annual            Int? // median tuition + fees, before aid
+  net_price_annual          Int? // median cost of attendance minus grant aid
+  cost_of_attendance_annual Int? // median full cost incl. living, before aid
+  sample_size               Int // number of schools in the median
+  source                    String   @default("College Scorecard: Most-Recent-Cohorts-Institution")
+  created_at                DateTime @default(now())
+  updated_at                DateTime @updatedAt
+}
+
+// Per-school data from the College Scorecard API. Seeded by
+// scripts/seed-schools.ts and filled on demand by /api/schools/search.
+model School {
+  school_id            Int             @id // Scorecard id (UNITID)
+  name                 String
+  city                 String
+  state                String
+  school_type          String // Public | Private nonprofit | Private for-profit
+  predominant_degree   Int? // 1=certificate, 2=associate's, 3=bachelor's, 4=graduate
+  url                  String?
+  student_size         Int?
+  tuition_in_state     Int?
+  tuition_out_of_state Int?
+  avg_net_price        Int?
+  net_price_by_income  Json? // { "0-30000": n, "30001-48000": n, ... }
+  graduation_rate      Float?
+  median_debt          Int?
+  earnings_6yr         Int? // median, 6 years after entry
+  earnings_10yr        Int? // median, 10 years after entry
+  admission_rate       Float?
+  retention_rate       Float?
+  repayment_rate_3yr   Float?
+  programs             SchoolProgram[]
+  fetched_at           DateTime        @default(now())
+  created_at           DateTime        @default(now())
+  updated_at           DateTime        @updatedAt
+
+  @@index([name])
+  @@index([state])
+}
+
+// Per-school, per-program earnings and debt from the College Scorecard API.
+// cip_code is a plain string (no FK) because Scorecard includes CIP codes
+// that are not in CipCode.
+model SchoolProgram {
+  id               String   @id @default(uuid())
+  school           School   @relation(fields: [school_id], references: [school_id], onDelete: Cascade)
+  school_id        Int
+  cip_code         String // 4-digit CIP, no dot, e.g. "1107"
+  title            String
+  credential_level Int // 1=Undergrad Cert, 2=Associate, 3=Bachelor, 4=Post-bacc Cert, 5=Master, 6=Doctoral, 7=First Professional, 8=Grad/Prof Cert
+  earnings_1yr     Int? // median, 1 year after graduation
+  earnings_4yr     Int? // median, 4 years after graduation
+  median_debt      Int?
+  fetched_at       DateTime @default(now())
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@unique([school_id, cip_code, credential_level])
+  @@index([cip_code])
 }

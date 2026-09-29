@@ -3,21 +3,16 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import {
-  Home,
-  Compass,
-  Bot,
-  HelpCircle,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from 'lucide-react'
+import { Compass, HelpCircle, Mountain, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { PATHS } from '../paths/paths'
 
+// The two experiences from the landing page, with the same icons, plus the FAQ.
+// Explore stays active on its five path pages, which the /explore hub lists.
 const links = [
-  { href: '/', label: 'Home', icon: Home },
-  { href: '/chat', label: 'Counselor Agent', icon: Bot },
-  { href: '/explore', label: 'Explore', icon: Compass },
-  { href: '/faq', label: 'FAQ', icon: HelpCircle },
+  { href: '/chat', label: 'Guided experience', icon: Mountain, matches: ['/chat'] },
+  { href: '/explore', label: 'Explore on your own', icon: Compass, matches: ['/explore', ...PATHS.map((p) => p.href)] },
+  { href: '/faq', label: 'FAQ', icon: HelpCircle, matches: ['/faq'] },
 ]
 
 export default function SideNav() {
@@ -45,8 +40,8 @@ export default function SideNav() {
         </button>
 
         <nav className="mt-2 flex flex-col gap-1">
-          {links.map(({ href, label, icon: Icon }) => {
-            const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
+          {links.map(({ href, label, icon: Icon, matches }) => {
+            const active = matches.some((m) => pathname === m || pathname.startsWith(`${m}/`))
             return (
               <Link
                 key={href}

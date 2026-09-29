@@ -119,51 +119,6 @@ function SchoolCard({ school }: { school: Record<string, unknown> }) {
   )
 }
 
-interface Occupation {
-  occupation: string
-  annual_salary: number
-  relevance: number
-}
-
-function MajorCard({ major }: { major: Record<string, unknown> }) {
-  const name = (major.major ?? major.name) as string
-  const occupations = major.occupations as Occupation[]
-
-  if (!occupations?.length) return null
-
-  const sorted = [...occupations].sort((a, b) => b.annual_salary - a.annual_salary)
-  const top = sorted.slice(0, 8)
-  const totalWeight = occupations.reduce((s, o) => s + o.relevance, 0)
-  const weightedAvg = Math.round(
-    occupations.reduce((s, o) => s + o.annual_salary * o.relevance, 0) / totalWeight
-  )
-
-  const chartData = top.map((o) => ({
-    name: o.occupation.length > 30 ? o.occupation.slice(0, 28) + '…' : o.occupation,
-    salary: o.annual_salary,
-  }))
-
-  return (
-    <div className="rounded-lg border bg-card p-4 space-y-4">
-      <div>
-        <h3 className="font-semibold text-sm">{name}</h3>
-        <p className="text-xs text-muted-foreground">
-          {occupations.length} linked occupations · Weighted avg: {fmt(weightedAvg)}/yr
-        </p>
-      </div>
-
-      <ResponsiveContainer width="100%" height={chartData.length * 36 + 8}>
-        <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 40, top: 0, bottom: 0 }}>
-          <XAxis type="number" hide />
-          <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 10 }} />
-          <Tooltip formatter={tooltipFmt} />
-          <Bar dataKey="salary" radius={[0, 4, 4, 0]} fill={COLORS[0]} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  )
-}
-
 function ProgramsCard({ data }: { data: Record<string, unknown> }) {
   const schoolName = data.school_name as string
   const programs = data.programs as {
@@ -243,12 +198,6 @@ export default function DataDisplay({ blocks }: { blocks: DataBlock[] }) {
             const schools = payload.results ?? []
             return schools.map((school, j) => (
               <SchoolCard key={`${i}-${j}`} school={school} />
-            ))
-          }
-          case 'find_majors': {
-            const majors = block.data as Record<string, unknown>[]
-            return majors.map((major, j) => (
-              <MajorCard key={`${i}-${j}`} major={major} />
             ))
           }
           case 'get_school_programs':

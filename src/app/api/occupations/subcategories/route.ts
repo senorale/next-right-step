@@ -11,6 +11,7 @@ export async function GET(request: Request) {
         id: true,
         name: true,
         annual_salary: true,
+        typical_years_of_school: true,
         category_id: true,
         category: {
           select: {

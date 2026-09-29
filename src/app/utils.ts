@@ -41,19 +41,32 @@ export function calculateTotalInterestPaid(
   return Math.max(0, totalInterestPaid);
 }
 
-export function calculateBreakEvenYears(
-  collegeCost: number,
-  collegeSalary: number,
-  hsSalary: number
-): number | string {
-  const salaryDifference = collegeSalary - hsSalary;
+/**
+ * Years until an education investment is recovered by the salary gain over a
+ * baseline (HS diploma, current salary, etc.). Returns null when the new
+ * salary does not exceed the baseline, meaning it never pays off.
+ */
+export function calculatePayoffYears(
+  totalCost: number,
+  newSalary: number,
+  baselineSalary: number
+): number | null {
+  const salaryDelta = newSalary - baselineSalary;
+  if (salaryDelta <= 0) return null;
+  return totalCost / salaryDelta;
+}
 
-  if (salaryDifference <= 0) {
-    return "College salary does not exceed high school salary, break-even not possible.";
-  }
-
-  const breakEvenYears = collegeCost / salaryDifference;
-  return breakEvenYears;
+/** Fixed monthly payment that amortizes a loan over its term. */
+export function calculateMonthlyPayment(
+  principal: number,
+  annualInterestRate: number,
+  termYears: number
+): number {
+  if (!(principal > 0) || !(termYears > 0)) return 0;
+  const months = termYears * 12;
+  if (!(annualInterestRate > 0)) return principal / months;
+  const r = annualInterestRate / 100 / 12;
+  return (principal * r * Math.pow(1 + r, months)) / (Math.pow(1 + r, months) - 1);
 }
 
   

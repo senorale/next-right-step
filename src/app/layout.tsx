@@ -9,8 +9,8 @@ import FeedbackDialog from "./components/FeedbackDialog";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Should I Go To School?",
-  description: "Calculate the true cost of attenting college",
+  title: "Next Right Step",
+  description: "Compare the real cost and payoff of college, trades, and careers",
 };
 
 export default function RootLayout({
