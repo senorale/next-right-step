@@ -3,11 +3,11 @@ import * as C from '@/app/constants/college_related_constants'
 
 export const HS_SALARY = C.HIGHSCHOOL_DIPLOMA_MEDIAN_SALARY
 export const LOAN_RATE = parseFloat(C.STUDENT_LOAN_INTEREST_RATE)
-export const REPAYMENT_YEARS = C.STANDARD_REPAYMENT_YEARS
+export const REPAYMENT_YEARS = C.TYPICAL_REPAYMENT_YEARS
 
 export interface Financials {
   debt: number
-  /** Interest paid over standard repayment of the debt */
+  /** Interest paid over typical repayment of the debt */
   interest: number
   opportunityCost: number
   totalCost: number

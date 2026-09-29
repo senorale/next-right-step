@@ -32,7 +32,7 @@ export default function PayoffSummary({
       <Stat
         label="Monthly payment"
         value={money(f.monthlyPayment)}
-        info={`Standard ${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}% federal rate.`}
+        info={`Typical ${REPAYMENT_YEARS}-year repayment (what most borrowers take, not the 10-year standard plan) at ${LOAN_RATE}% federal rate.`}
       />
       <Stat
         label="Total cost"

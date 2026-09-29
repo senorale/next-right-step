@@ -198,6 +198,11 @@ export default function CareerPath() {
                   <p className="font-medium">
                     {gap.remainingCost === null ? 'Cost data unavailable for this career' : money(gap.remainingCost)}
                   </p>
+                  {gap.remainingCost !== null && target.debtEstimated && (
+                    <p className="text-sm text-muted-foreground">
+                      No related degree reports debt, so this is estimated from the broader field family.
+                    </p>
+                  )}
                 </li>
                 <li>
                   <p className="text-sm text-muted-foreground">Then</p>

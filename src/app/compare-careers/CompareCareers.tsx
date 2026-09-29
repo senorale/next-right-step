@@ -117,12 +117,16 @@ export default function CompareCareers() {
                   { label: 'Typical credential', values: rows.map((r) => r.c.credentialLabel ?? 'None') },
                   {
                     label: 'Education debt',
-                    info: "Median student debt for the typical credential across related degree fields, weighted by number of schools reporting. Graduate paths add the national median bachelor's debt. Source: College Scorecard.",
-                    values: rows.map((r) => (r.c.totalDebt === null ? 'Cost data unavailable' : money(r.c.totalDebt))),
+                    info: "Median student debt for the typical credential across related degree fields, weighted by number of schools reporting. Graduate paths add the national median bachelor's debt. When no related field reports debt, it is estimated from the broader field family. Source: College Scorecard.",
+                    values: rows.map((r) =>
+                      r.c.totalDebt === null
+                        ? 'Cost data unavailable'
+                        : `${money(r.c.totalDebt)}${r.c.debtEstimated ? ' (estimated)' : ''}`
+                    ),
                   },
                   {
                     label: 'Loan interest',
-                    info: `Interest paid on the debt over standard ${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%.`,
+                    info: `Interest paid on the debt over typical ${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%.`,
                     values: rows.map((r) => moneyOrNA(r.financials?.interest)),
                   },
                   {
@@ -147,7 +151,7 @@ export default function CompareCareers() {
                   },
                   {
                     label: 'Monthly loan payment',
-                    info: `Standard ${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%.`,
+                    info: `Typical ${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%.`,
                     values: rows.map((r) => moneyOrNA(r.financials?.monthlyPayment)),
                   },
                 ]}
@@ -179,6 +183,11 @@ export default function CompareCareers() {
                   name: r.c.occupation.name,
                   value: r.financials && r.financials.totalCost > 0 ? r.financials.payoffYears : null,
                   color: colorAt(i),
+                  note: !r.financials
+                    ? undefined
+                    : r.financials.totalCost === 0
+                      ? 'Nothing to pay off'
+                      : 'Does not pay off',
                 }))}
                 format={years}
               />

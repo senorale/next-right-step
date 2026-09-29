@@ -8,13 +8,20 @@ import SchoolSearch from '../components/paths/SchoolSearch'
 import SelectedPills from '../components/paths/SelectedPills'
 import ComparisonTable, { bestIndex, type ComparisonRow } from '../components/paths/ComparisonTable'
 import BarChartComparison from '../components/paths/BarChartComparison'
-import { HS_SALARY, LOAN_RATE, REPAYMENT_YEARS } from '../components/paths/finance'
-import { calculateMonthlyPayment, calculatePayoffYears, calculateTotalInterestPaid } from '@/app/utils'
-import { colorAt, money, moneyOrNA, pctOrNA, ratio, years } from '../components/paths/format'
+import { computeFinancials, HS_SALARY, LOAN_RATE, REPAYMENT_YEARS } from '../components/paths/finance'
+import { calculateMonthlyPayment } from '@/app/utils'
+import { colorAt, money, moneyOrNA, pctOrNA, ratio, schoolYears, years } from '../components/paths/format'
 import type { School } from '../components/paths/types'
 
 const MAX_SCHOOLS = 5
-const YEARS_IN_SCHOOL = parseFloat(C.BACHELOR_YEARS_IN_SCHOOL)
+const BACHELOR_YEARS = parseFloat(C.BACHELOR_YEARS_IN_SCHOOL)
+
+/** Years of school implied by the credential a school mostly awards. */
+function yearsInSchool(s: School): number {
+  if (s.predominant_degree === 1) return 1
+  if (s.predominant_degree === 2) return 2
+  return BACHELOR_YEARS
+}
 
 const INCOME_BRACKETS: { key: string; label: string }[] = [
   { key: 'overall', label: 'Average' },
@@ -71,16 +78,19 @@ export default function CompareSchools() {
 
   const rows = schools.map((s) => {
     const price = netPrice(s, bracket)
-    const schoolCost = price == null ? null : price * YEARS_IN_SCHOOL
-    // Assumes the full net price is borrowed, so interest is added on top.
-    const totalCost =
-      schoolCost == null ? null : schoolCost + calculateTotalInterestPaid(schoolCost, LOAN_RATE, REPAYMENT_YEARS)
+    const y = yearsInSchool(s)
+    // Assumes the full net price is borrowed, so interest is added on top, plus
+    // high school earnings given up while in school.
+    const financials =
+      price == null || s.earnings_10yr == null
+        ? null
+        : computeFinancials({ debt: price * y, yearsInSchool: y, salary: s.earnings_10yr, baselineSalary: HS_SALARY })
     return {
       s,
       price,
-      totalCost,
-      payoffYears:
-        totalCost == null || s.earnings_10yr == null ? null : calculatePayoffYears(totalCost, s.earnings_10yr, HS_SALARY),
+      years: y,
+      financials,
+      payoffYears: financials?.payoffYears ?? null,
       earningsToDebt: s.earnings_10yr != null && s.median_debt ? s.earnings_10yr / s.median_debt : null,
       monthly: s.median_debt == null ? null : calculateMonthlyPayment(s.median_debt, LOAN_RATE, REPAYMENT_YEARS),
     }
@@ -203,10 +213,21 @@ export default function CompareSchools() {
                 rows={[
                   ...METRICS.filter((m) => metrics.has(m.key)).map((m) => metricRows[m.key]),
                   {
+                    label: 'Years of school',
+                    info: "Based on the credential the school mostly awards: 1 year for certificates, 2 for associate's, 4 otherwise.",
+                    values: rows.map((r) => schoolYears(r.years)),
+                  },
+                  {
+                    label: 'Total cost',
+                    info: `Net price x years of school, plus loan interest (${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%), plus high school earnings given up while in school (${money(HS_SALARY)}/yr).`,
+                    values: rows.map((r) => moneyOrNA(r.financials?.totalCost)),
+                    best: bestIndex(rows.map((r) => r.financials?.totalCost ?? null), false),
+                  },
+                  {
                     label: 'Payoff timeline',
-                    info: `Net price x ${YEARS_IN_SCHOOL} years plus loan interest (${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%), divided by the yearly earnings gain over a high school diploma (${money(HS_SALARY)}).`,
+                    info: `Total cost divided by the yearly earnings gain over a high school diploma (${money(HS_SALARY)}).`,
                     values: rows.map((r) =>
-                      r.totalCost == null || r.s.earnings_10yr == null
+                      !r.financials
                         ? 'n/a'
                         : r.payoffYears === null
                           ? 'Does not pay off'
@@ -222,7 +243,7 @@ export default function CompareSchools() {
                   },
                   {
                     label: 'Monthly payment on median debt',
-                    info: `Standard ${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%.`,
+                    info: `Typical ${REPAYMENT_YEARS}-year repayment at ${LOAN_RATE}%.`,
                     values: rows.map((r) => moneyOrNA(r.monthly)),
                   },
                 ]}
@@ -246,7 +267,12 @@ export default function CompareSchools() {
               />
               <BarChartComparison
                 title="Payoff timeline (years)"
-                data={rows.map((r, i) => ({ name: r.s.name, value: r.payoffYears, color: colorAt(i) }))}
+                data={rows.map((r, i) => ({
+                  name: r.s.name,
+                  value: r.payoffYears,
+                  color: colorAt(i),
+                  note: r.financials ? 'Does not pay off' : undefined,
+                }))}
                 format={years}
               />
             </CardContent>

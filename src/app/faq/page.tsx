@@ -107,10 +107,10 @@ const faqs: { q: string; a: ReactNode }[] = [
     q: 'What loan interest rate and repayment plan do you assume?',
     a: (
       <>
-        By default, an illustrative {C.STUDENT_LOAN_INTEREST_RATE}% rate on a standard
-        10-year plan. Real rates change yearly, and income-driven or longer plans stretch
-        repayment and interest well beyond 10 years. In practice the average borrower owes
-        about $39,000 and takes up to 20 years to repay, at roughly $200 to $299 a month (
+        A {C.STUDENT_LOAN_INTEREST_RATE}% rate repaid over {C.TYPICAL_REPAYMENT_YEARS} years.
+        The federal standard plan is 10 years, but most borrowers take much longer: the
+        average borrower owes about $39,000 and takes up to 20 years to repay, at roughly $200
+        to $299 a month (
         <a
           href="https://educationdata.org/student-loan-debt-statistics"
           target="_blank"

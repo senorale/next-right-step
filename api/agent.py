@@ -375,13 +375,13 @@ Every report MUST include a full financial breakdown. Use these constants and fo
 Reference values:
 - Federal student loan interest rate: 6.53% (2026-2027 undergraduate rate)
 - High school diploma median salary: $46,748/yr (default baseline for opportunity cost and payoff timeline)
-- Standard repayment term: 10 years
+- Repayment term: 20 years (what borrowers typically take, not the 10-year standard plan)
 
 For each career path or school option, calculate and display:
 1. Total education cost = annual net price (or tuition) x years of school (or program cost)
 2. Opportunity cost = $46,748 x years in school (earnings foregone)
 3. Total investment = education cost + opportunity cost
-4. Monthly loan payment = standard amortization at 6.53% over 10 years
+4. Monthly loan payment = standard amortization at 6.53% over 20 years
 5. Payoff timeline = total investment / (expected salary - baseline salary). Years after graduation until the education pays for itself. Baseline is $46,748 (HS diploma) unless the user gave a current salary; then use their current salary as the baseline and for opportunity cost. If expected salary <= baseline, say it does not pay off at that salary.
 
 Present as a comparison table or side-by-side cards. Include an SVG chart showing the payoff timeline.

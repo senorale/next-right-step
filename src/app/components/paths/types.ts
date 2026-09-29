@@ -21,6 +21,8 @@ export interface CareerCost {
   credentialLabel: string | null
   medianDebt: number | null
   debtSampleSize: number
+  /** medianDebt is estimated from related fields (2-digit CIP family) */
+  debtEstimated: boolean
   undergradDebt: number
   totalDebt: number | null
   degrees: { code: string; title: string }[]
@@ -33,6 +35,8 @@ export interface School {
   city: string
   state: string
   school_type: string
+  /** 1=certificate, 2=associate's, 3=bachelor's, 4=graduate */
+  predominant_degree: number | null
   url: string | null
   student_size: number | null
   tuition_in_state: number | null

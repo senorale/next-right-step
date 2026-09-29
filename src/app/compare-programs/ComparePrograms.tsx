@@ -162,7 +162,7 @@ export default function ComparePrograms() {
                   },
                   {
                     label: 'National salary in related jobs',
-                    info: 'Median of national salaries for occupations linked to this field. Source: Bureau of Labor Statistics.',
+                    info: 'Median of national salaries for occupations linked to this field that this credential typically leads to. Source: Bureau of Labor Statistics.',
                     values: rows.map((r) => moneyOrNA(r.bls)),
                   },
                   {

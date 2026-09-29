@@ -18,6 +18,8 @@ export interface CareerCost {
   /** Weighted median debt for the target credential, null when school is required but no debt data exists. */
   medianDebt: number | null
   debtSampleSize: number
+  /** True when no linked field had debt data and medianDebt comes from the fields' 2-digit CIP families. */
+  debtEstimated: boolean
   /** Graduate credentials also require a bachelor's: national weighted bachelor's debt, else 0. */
   undergradDebt: number
   /** medianDebt + undergradDebt, null when medianDebt is null. */
@@ -47,7 +49,7 @@ const CREDENTIAL_LABELS: Record<number, string> = {
 let bachelorsDebtCache: number | null = null
 
 /** Weighted median bachelor's debt across all degree fields. */
-async function nationalBachelorsDebt(): Promise<number> {
+export async function nationalBachelorsDebt(): Promise<number> {
   if (bachelorsDebtCache !== null) return bachelorsDebtCache
   const rows = await prisma.programDebt.findMany({
     where: { school_type: 'all', credential_level: 3 },
@@ -56,6 +58,28 @@ async function nationalBachelorsDebt(): Promise<number> {
   const n = rows.reduce((s, r) => s + r.sample_size, 0)
   bachelorsDebtCache = n > 0 ? Math.round(rows.reduce((s, r) => s + r.median_debt * r.sample_size, 0) / n) : 0
   return bachelorsDebtCache
+}
+
+/**
+ * Fallback when none of an occupation's degree fields report debt: weighted
+ * median debt across every field in the same 2-digit CIP families (e.g. 45xx
+ * Social Sciences for Sociology 4511) at the target credential levels.
+ */
+async function familyDebt(cipCodes: string[], levels: number[]): Promise<{ debt: number; sampleSize: number } | null> {
+  const families = [...new Set(cipCodes.map((c) => c.slice(0, 2)))]
+  if (families.length === 0) return null
+  const rows = await prisma.programDebt.findMany({
+    where: {
+      school_type: 'all',
+      credential_level: { in: levels },
+      sample_size: { gt: 0 },
+      cip: { OR: families.map((f) => ({ code: { startsWith: f } })) },
+    },
+    select: { median_debt: true, sample_size: true },
+  })
+  const n = rows.reduce((s, r) => s + r.sample_size, 0)
+  if (n === 0) return null
+  return { debt: Math.round(rows.reduce((s, r) => s + r.median_debt * r.sample_size, 0) / n), sampleSize: n }
 }
 
 export async function getCareerCost(where: { id: string } | { occupation_code: string }): Promise<CareerCost | null> {
@@ -98,7 +122,16 @@ export async function getCareerCost(where: { id: string } | { occupation_code: s
     }
   }
 
-  const medianDebt = levels.length === 0 ? 0 : sampleSize > 0 ? Math.round(weightedSum / sampleSize) : null
+  let medianDebt = levels.length === 0 ? 0 : sampleSize > 0 ? Math.round(weightedSum / sampleSize) : null
+  let debtEstimated = false
+  if (medianDebt === null) {
+    const family = await familyDebt(occupation.cip_mappings.map(({ cip }) => cip.code), levels)
+    if (family) {
+      medianDebt = family.debt
+      sampleSize = family.sampleSize
+      debtEstimated = true
+    }
+  }
   const isGraduate = levels.some((l) => l >= 5)
   const undergradDebt = isGraduate ? await nationalBachelorsDebt() : 0
 
@@ -109,6 +142,7 @@ export async function getCareerCost(where: { id: string } | { occupation_code: s
     credentialLabel: levels.length > 0 ? CREDENTIAL_LABELS[levels[0]] : null,
     medianDebt,
     debtSampleSize: sampleSize,
+    debtEstimated,
     undergradDebt,
     totalDebt: medianDebt === null ? null : medianDebt + undergradDebt,
     degrees: cip_mappings.map(({ cip }) => ({ code: cip.code, title: cip.title.replace(/\.$/, '') })),
