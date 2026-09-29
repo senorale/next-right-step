@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import * as C from '@/app/constants/college_related_constants'
 import PathHeader from '../components/paths/PathHeader'
+import MoreDetails from '../components/paths/MoreDetails'
 import SchoolSearch from '../components/paths/SchoolSearch'
 import SelectedPills from '../components/paths/SelectedPills'
 import ComparisonTable, { bestIndex, type ComparisonRow } from '../components/paths/ComparisonTable'
@@ -279,9 +280,7 @@ export default function CompareSchools() {
           </Card>
         )}
 
-        <p className="text-center text-sm text-muted-foreground">
-          School data: College Scorecard (U.S. Department of Education). Not inflation-adjusted.
-        </p>
+        <MoreDetails />
       </div>
     </main>
   )

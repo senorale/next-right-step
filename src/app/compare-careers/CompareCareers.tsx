@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import PathHeader from '../components/paths/PathHeader'
+import MoreDetails from '../components/paths/MoreDetails'
 import OccupationSearch from '../components/paths/OccupationSearch'
 import SelectedPills from '../components/paths/SelectedPills'
 import ComparisonTable, { bestIndex } from '../components/paths/ComparisonTable'
@@ -195,10 +196,7 @@ export default function CompareCareers() {
           </Card>
         )}
 
-        <p className="text-center text-sm text-muted-foreground">
-          Salaries: Bureau of Labor Statistics (May 2024), national medians, capped at $239,200/yr.
-          Debt: College Scorecard. Not inflation-adjusted.
-        </p>
+        <MoreDetails />
       </div>
     </main>
   )

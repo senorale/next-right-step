@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import PathHeader from '../components/paths/PathHeader'
+import MoreDetails from '../components/paths/MoreDetails'
 import SchoolSearch from '../components/paths/SchoolSearch'
 import SearchDropdown from '../components/paths/SearchDropdown'
 import SelectedPills from '../components/paths/SelectedPills'
@@ -212,9 +213,7 @@ export default function ComparePrograms() {
           </Card>
         )}
 
-        <p className="text-center text-sm text-muted-foreground">
-          School program data: College Scorecard (school-specific). National salaries: Bureau of Labor Statistics (May 2024).
-        </p>
+        <MoreDetails />
       </div>
     </main>
   )

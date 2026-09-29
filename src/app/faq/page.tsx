@@ -65,6 +65,17 @@ const faqs: { q: string; a: ReactNode }[] = [
     ),
   },
   {
+    q: 'Are the numbers adjusted for inflation? Are salaries capped?',
+    a: (
+      <>
+        No inflation adjustment: all figures are in the dollars of the year each source reports
+        (BLS wages from May 2024, the latest College Scorecard release). BLS does not publish
+        exact wages above $239,200 a year, so the highest-paid occupations show that capped
+        figure.
+      </>
+    ),
+  },
+  {
     q: 'How is the pay-off point calculated?',
     a: (
       <>
