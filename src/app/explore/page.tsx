@@ -35,11 +35,7 @@ export default function ExploreHub() {
         <p className="text-center text-sm text-muted-foreground">
           Not sure where to start?{' '}
           <Link href="/chat" className="text-primary hover:underline">
-            Take the guided hike with our counselor
-          </Link>{' '}
-          or{' '}
-          <Link href="/explore/overview" className="text-primary hover:underline">
-            read the big-picture overview
+            Try the guided experience with our AI counselor
           </Link>
           .
         </p>

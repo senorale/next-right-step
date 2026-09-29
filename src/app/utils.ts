@@ -41,21 +41,6 @@ export function calculateTotalInterestPaid(
   return Math.max(0, totalInterestPaid);
 }
 
-export function calculateBreakEvenYears(
-  collegeCost: number,
-  collegeSalary: number,
-  hsSalary: number
-): number | string {
-  const salaryDifference = collegeSalary - hsSalary;
-
-  if (salaryDifference <= 0) {
-    return "College salary does not exceed high school salary, break-even not possible.";
-  }
-
-  const breakEvenYears = collegeCost / salaryDifference;
-  return breakEvenYears;
-}
-
 /**
  * Years until an education investment is recovered by the salary gain over a
  * baseline (HS diploma, current salary, etc.). Returns null when the new
