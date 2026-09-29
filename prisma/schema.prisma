@@ -128,6 +128,7 @@ model School {
   city                 String
   state                String
   school_type          String // Public | Private nonprofit | Private for-profit
+  predominant_degree   Int? // 1=certificate, 2=associate's, 3=bachelor's, 4=graduate
   url                  String?
   student_size         Int?
   tuition_in_state     Int?

@@ -4,11 +4,23 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { fetchAndStorePrograms } from '@/lib/scorecard'
 
-const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000
+// Approximate years of school for each Scorecard CREDLEV code.
+const YEARS_BY_CREDENTIAL: Record<number, number> = { 1: 1, 2: 2, 3: 4, 4: 5, 5: 6, 6: 8, 7: 8, 8: 6 }
+
+/**
+ * Occupations a graduate of this credential can typically enter: those whose
+ * typical years of school do not exceed the credential's. A nursing bachelor's
+ * links to Registered Nurses, not Nurse Anesthetists (a doctorate).
+ */
+function reachable<T extends { typical_years_of_school: number | null }>(occupations: T[], credentialLevel: number): T[] {
+  const years = YEARS_BY_CREDENTIAL[credentialLevel]
+  if (years === undefined) return occupations
+  return occupations.filter((o) => (o.typical_years_of_school ?? 0) <= years)
+}
 
 // GET /api/schools/134130/programs
-// Programs load lazily: the first request for a school (or one older than 30
-// days) fetches all its programs from the College Scorecard API and stores them.
+// Programs load lazily: the first request for a school fetches all its programs
+// from the College Scorecard API and stores them. Stored programs are not refetched.
 export async function GET(_request: NextRequest, ctx: RouteContext<'/api/schools/[id]/programs'>) {
   const { id } = await ctx.params
   const schoolId = Number(id)
@@ -17,13 +29,9 @@ export async function GET(_request: NextRequest, ctx: RouteContext<'/api/schools
   }
 
   try {
-    const newest = await prisma.schoolProgram.findFirst({
-      where: { school_id: schoolId },
-      orderBy: { fetched_at: 'desc' },
-      select: { fetched_at: true },
-    })
+    const stored = await prisma.schoolProgram.findFirst({ where: { school_id: schoolId }, select: { id: true } })
     let source = 'db'
-    if (!newest || Date.now() - newest.fetched_at.getTime() > STALE_AFTER_MS) {
+    if (!stored) {
       await fetchAndStorePrograms(prisma, schoolId)
       source = 'scorecard'
     }
@@ -46,7 +54,9 @@ export async function GET(_request: NextRequest, ctx: RouteContext<'/api/schools
       select: {
         code: true,
         occupations: {
-          select: { occupation: { select: { id: true, name: true, annual_salary: true } } },
+          select: {
+            occupation: { select: { id: true, name: true, annual_salary: true, typical_years_of_school: true } },
+          },
         },
         debt: {
           where: { school_type: 'all' },
@@ -72,7 +82,7 @@ export async function GET(_request: NextRequest, ctx: RouteContext<'/api/schools
       programs: programs.map((p) => ({
         ...p,
         national_median_debt: nationalDebt.get(`${p.cip_code}:${p.credential_level}`) ?? null,
-        occupations: occupationsByCip.get(p.cip_code) ?? [],
+        occupations: reachable(occupationsByCip.get(p.cip_code) ?? [], p.credential_level),
       })),
     })
   } catch (error) {

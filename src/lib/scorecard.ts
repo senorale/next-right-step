@@ -32,6 +32,7 @@ const SCHOOL_FIELDS = [
   'school.state',
   'school.school_url',
   'school.ownership',
+  'school.degrees_awarded.predominant',
   'latest.student.size',
   'latest.cost.tuition.in_state',
   'latest.cost.tuition.out_of_state',
@@ -78,6 +79,8 @@ export interface SchoolQuery {
   /** school.degrees_awarded.predominant, e.g. 3 = bachelor's */
   predominantDegree?: number
   id?: number
+  /** Several school ids at once */
+  ids?: number[]
 }
 
 function apiKey(): string {
@@ -122,6 +125,7 @@ async function fetchPage(
     'school.operating': '1',
   })
   if (query.id !== undefined) params.set('id', String(query.id))
+  if (query.ids?.length) params.set('id', query.ids.join(','))
   if (query.name) params.set('school.name', query.name)
   if (query.state) params.set('school.state', query.state.toUpperCase())
   if (query.predominantDegree !== undefined) {
@@ -178,6 +182,7 @@ export function mapSchool(r: ScorecardRow): SchoolRow | null {
     city,
     state,
     school_type: OWNERSHIP_LABELS[int(r['school.ownership']) ?? 0] ?? 'Unknown',
+    predominant_degree: int(r['school.degrees_awarded.predominant']),
     url: str(r['school.school_url']),
     student_size: int(r['latest.student.size']),
     tuition_in_state: int(r['latest.cost.tuition.in_state']),
@@ -231,20 +236,13 @@ export async function upsertSchools(prisma: PrismaClient, rows: SchoolRow[]): Pr
   )
 }
 
-/** Replace all programs for the given schools with the fetched rows. */
-export async function replacePrograms(
-  prisma: PrismaClient,
-  schoolIds: number[],
-  rows: SchoolProgramRow[]
-): Promise<void> {
+/** Insert fetched programs. Additive: existing rows are kept as they are. */
+export async function insertPrograms(prisma: PrismaClient, rows: SchoolProgramRow[]): Promise<void> {
   const now = new Date()
-  await prisma.$transaction([
-    prisma.schoolProgram.deleteMany({ where: { school_id: { in: schoolIds } } }),
-    prisma.schoolProgram.createMany({
-      data: rows.map((row) => ({ ...row, fetched_at: now })),
-      skipDuplicates: true,
-    }),
-  ])
+  await prisma.schoolProgram.createMany({
+    data: rows.map((row) => ({ ...row, fetched_at: now })),
+    skipDuplicates: true,
+  })
 }
 
 /** Runtime fallback: search Scorecard by name/state, persist matches, return them. */
@@ -273,6 +271,6 @@ export async function fetchAndStorePrograms(
 
   const page = await fetchProgramsPage({ id: schoolId }, 0, 1)
   const rows = page.results.flatMap(mapPrograms)
-  await replacePrograms(prisma, [schoolId], rows)
+  await insertPrograms(prisma, rows)
   return rows
 }
