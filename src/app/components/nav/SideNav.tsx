@@ -3,23 +3,16 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import {
-  Home,
-  Compass,
-  Bot,
-  HelpCircle,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from 'lucide-react'
+import { Compass, HelpCircle, Mountain, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PATHS } from '../paths/paths'
 
+// The two experiences from the landing page, with the same icons, plus the FAQ.
+// Explore stays active on its five path pages, which the /explore hub lists.
 const links = [
-  { href: '/', label: 'Home', icon: Home, sub: false },
-  { href: '/explore', label: 'Explore paths', icon: Compass, sub: false },
-  ...PATHS.map((p) => ({ href: p.href, label: p.title, icon: p.icon, sub: true })),
-  { href: '/chat', label: 'Counselor Agent', icon: Bot, sub: false },
-  { href: '/faq', label: 'FAQ', icon: HelpCircle, sub: false },
+  { href: '/chat', label: 'Guided experience', icon: Mountain, matches: ['/chat'] },
+  { href: '/explore', label: 'Explore on your own', icon: Compass, matches: ['/explore', ...PATHS.map((p) => p.href)] },
+  { href: '/faq', label: 'FAQ', icon: HelpCircle, matches: ['/faq'] },
 ]
 
 export default function SideNav() {
@@ -47,8 +40,8 @@ export default function SideNav() {
         </button>
 
         <nav className="mt-2 flex flex-col gap-1">
-          {links.map(({ href, label, icon: Icon, sub }) => {
-            const active = href === '/' || href === '/explore' ? pathname === href : pathname.startsWith(href)
+          {links.map(({ href, label, icon: Icon, matches }) => {
+            const active = matches.some((m) => pathname === m || pathname.startsWith(`${m}/`))
             return (
               <Link
                 key={href}
@@ -56,7 +49,6 @@ export default function SideNav() {
                 title={label}
                 className={cn(
                   'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                  sub && !collapsed && 'ml-4',
                   active
                     ? 'bg-primary text-primary-foreground'
                     : 'text-foreground hover:bg-accent'
