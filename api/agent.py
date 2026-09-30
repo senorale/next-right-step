@@ -14,6 +14,7 @@ How it works:
 import asyncio
 import json
 import logging
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -422,11 +423,19 @@ async def generate_report(
         "tool_results": data_blocks,
     }, default=_json_default)
 
+    t0 = time.perf_counter()
     response = await client.messages.create(
         model=REPORT_MODEL,
         max_tokens=REPORT_MAX_TOKENS,
         system=REPORT_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
+    )
+    elapsed = time.perf_counter() - t0
+    out_tokens = response.usage.output_tokens
+    logger.info(
+        "[timing] report LLM call: %.2fs, input_tokens=%d, output_tokens=%d (%.0f tok/s), stop_reason=%s",
+        elapsed, response.usage.input_tokens, out_tokens,
+        out_tokens / elapsed if elapsed else 0, response.stop_reason,
     )
 
     text = "".join(b.text for b in response.content if b.type == "text")
@@ -494,10 +503,17 @@ async def run_agent_stream(
     messages = _trim_history(messages)
     data_blocks: list[dict] = []
 
-    for _ in range(MAX_TOOL_ITERATIONS):
+    run_start = time.perf_counter()
+    llm_total = 0.0
+    tools_total = 0.0
+    report_total = 0.0
+
+    for iteration in range(MAX_TOOL_ITERATIONS):
         try:
             yield {"event": "progress", "message": "Thinking…"}
+            t0 = time.perf_counter()
             response = await _call_claude(messages)
+            llm_total += time.perf_counter() - t0
         except anthropic.APIError as exc:
             logger.error("Anthropic API failed after retries: %s", exc)
             yield {
@@ -536,7 +552,9 @@ async def run_agent_stream(
                         continue
 
                     try:
+                        t0 = time.perf_counter()
                         result = await asyncio.to_thread(func, tool_input)
+                        tools_total += time.perf_counter() - t0
                         result_json = json.dumps(result, default=_json_default)
                         tool_results.append(
                             {
@@ -574,7 +592,9 @@ async def run_agent_stream(
                 yield {"event": "progress", "message": "Generating report…"}
                 report_status = "failed"
                 try:
+                    t0 = time.perf_counter()
                     report = await generate_report(intake_answers, data_blocks, text_response)
+                    report_total = time.perf_counter() - t0
                     text_response = report.get("summary", text_response)
                     report_html = report.get("html", "")
                     if report_html:
@@ -587,6 +607,10 @@ async def run_agent_stream(
             else:
                 logger.info("Skipping report: data_blocks=%d, intake_answers=%s", len(data_blocks), intake_answers is not None)
 
+            logger.info(
+                "[timing] run total: %.2fs (agent LLM: %.2fs over %d calls, tools: %.2fs, report: %.2fs)",
+                time.perf_counter() - run_start, llm_total, iteration + 1, tools_total, report_total,
+            )
             yield {
                 "event": "complete",
                 "response": text_response,
