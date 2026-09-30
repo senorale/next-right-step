@@ -38,6 +38,15 @@ MODEL = "claude-haiku-4-5-20251001"
 REPORT_MODEL = "claude-haiku-4-5-20251001"
 # The LLM returns compact JSON content; report.py renders the HTML.
 REPORT_SPEC_MAX_TOKENS = 4096
+# Typical report output size, used to estimate progress while the report streams.
+# Tune from the "[timing] report LLM call" log lines.
+REPORT_EXPECTED_TOKENS = 1500
+
+# Progress bar ranges (percent) for each stage of a run.
+GATHERING_START, GATHERING_END = 5, 60
+GATHERING_STEP = 8
+WRITING_END = 95
+RENDERING_PERCENT = 97
 
 # Cap agent loop so a misbehaving model can't spin forever.
 # 8 = enough for realistic multi-tool trajectories, small enough that
@@ -255,11 +264,11 @@ Database schema (PostgreSQL, all table/column names are double-quoted):
 ]
 
 _TOOL_PROGRESS = {
-    "search_occupations": ("Searching occupations…", "Found matching occupations"),
-    "search_schools": ("Looking up schools…", "Found schools"),
-    "get_school_programs": ("Pulling program earnings…", "Got program data"),
-    "get_tuition_medians": ("Getting tuition data…", "Got tuition data"),
-    "run_sql": ("Querying database…", "Query complete"),
+    "search_occupations": "Searching occupations…",
+    "search_schools": "Looking up schools…",
+    "get_school_programs": "Pulling program earnings…",
+    "get_tuition_medians": "Getting tuition data…",
+    "run_sql": "Querying database…",
 }
 
 TOOL_DISPATCH = {
@@ -352,25 +361,46 @@ def _parse_json_response(text: str) -> dict | None:
         return None
 
 
-async def generate_report(
+def _progress(message: str, stage: str, percent: float, **extra) -> dict:
+    return {"event": "progress", "message": message, "stage": stage, "percent": round(percent), **extra}
+
+
+async def generate_report_stream(
     intake_answers: dict,
     data_blocks: list[dict],
     agent_text: str,
-) -> dict:
-    logger.info("generate_report: %d data_blocks, intake_keys=%s", len(data_blocks), list(intake_answers.keys()))
+):
+    """Async generator: yields progress events while the report streams, then
+    a final {"event": "report", "report": {"summary": ..., "html": ...}}."""
+    logger.info(
+        "generate_report: %d data_blocks, intake_keys=%s",
+        len(data_blocks), list(intake_answers.keys()),
+    )
     user_content = json.dumps({
         "intake_answers": intake_answers,
         "agent_summary": agent_text,
         "tool_results": data_blocks,
     }, default=_json_default)
 
+    yield _progress("Writing your report…", "writing", GATHERING_END)
     t0 = time.perf_counter()
-    response = await client.messages.create(
+    chars = 0
+    last_percent = GATHERING_END
+    async with client.messages.stream(
         model=REPORT_MODEL,
         max_tokens=REPORT_SPEC_MAX_TOKENS,
         system=REPORT_SPEC_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_content}],
-    )
+    ) as stream:
+        async for chunk in stream.text_stream:
+            chars += len(chunk)
+            # ~4 chars per token is close enough for a progress estimate.
+            fraction = min(1.0, (chars / 4) / REPORT_EXPECTED_TOKENS)
+            percent = GATHERING_END + (WRITING_END - GATHERING_END) * fraction
+            if percent - last_percent >= 3:
+                last_percent = percent
+                yield _progress("Writing your report…", "writing", percent)
+        response = await stream.get_final_message()
     elapsed = time.perf_counter() - t0
     out_tokens = response.usage.output_tokens
     logger.info(
@@ -383,12 +413,27 @@ async def generate_report(
     logger.info("Report response size: %d bytes, stop_reason=%s", len(text), response.stop_reason)
     parsed = _parse_json_response(text)
     if parsed is None:
-        return {"summary": agent_text, "html": ""}
+        yield {"event": "report", "report": {"summary": agent_text, "html": ""}}
+        return
 
+    yield _progress("Finalizing your report…", "rendering", RENDERING_PERCENT)
     parsed = {"summary": parsed.get("summary", agent_text), "html": render_report(parsed)}
 
     logger.info("Report parsed OK: summary=%d chars, html=%d chars", len(parsed.get("summary", "")), len(parsed.get("html", "")))
-    return parsed
+    yield {"event": "report", "report": parsed}
+
+
+async def generate_report(
+    intake_answers: dict,
+    data_blocks: list[dict],
+    agent_text: str,
+) -> dict:
+    """Non-streaming wrapper for callers that don't show progress (retry-report)."""
+    report = {"summary": agent_text, "html": ""}
+    async for event in generate_report_stream(intake_answers, data_blocks, agent_text):
+        if event["event"] == "report":
+            report = event["report"]
+    return report
 
 
 async def _call_claude(messages: list[dict]):
@@ -431,7 +476,8 @@ async def run_agent_stream(
     """Async generator yielding progress events then a final result.
 
     Event shapes:
-      {"event": "progress", "message": "Searching occupations…"}
+      {"event": "progress", "message": "Searching occupations…",
+       "stage": "gathering" | "writing" | "rendering", "percent": 0-100}
       {"event": "complete", "response": "...", "report_html": "...", "conversation_history": [...]}
     """
     messages = list(conversation_history) if conversation_history else []
@@ -443,13 +489,21 @@ async def run_agent_stream(
     llm_total = 0.0
     tools_total = 0.0
     report_total = 0.0
+    # Steps completed while gathering (agent calls + tools). Total is unknown
+    # up front, so each step advances a fixed amount, capped at GATHERING_END.
+    gather_steps = 0
+
+    def gathering(message: str) -> dict:
+        percent = min(GATHERING_END, GATHERING_START + GATHERING_STEP * gather_steps)
+        return _progress(message, "gathering", percent)
 
     for iteration in range(MAX_TOOL_ITERATIONS):
         try:
-            yield {"event": "progress", "message": "Thinking…"}
+            yield gathering("Understanding your question…" if iteration == 0 else "Reviewing what I found…")
             t0 = time.perf_counter()
             response = await _call_claude(messages)
             llm_total += time.perf_counter() - t0
+            gather_steps += 1
         except anthropic.APIError as exc:
             logger.error("Anthropic API failed after retries: %s", exc)
             yield {
@@ -470,10 +524,8 @@ async def run_agent_stream(
                     tool_input = block.input
                     tool_id = block.id
 
-                    progress_start, progress_done = _TOOL_PROGRESS.get(
-                        tool_name, (f"Running {tool_name}…", f"{tool_name} done")
-                    )
-                    yield {"event": "progress", "message": progress_start}
+                    progress_message = _TOOL_PROGRESS.get(tool_name, f"Running {tool_name}…")
+                    yield gathering(progress_message)
 
                     func = TOOL_DISPATCH.get(tool_name)
                     if not func:
@@ -501,7 +553,9 @@ async def run_agent_stream(
                         )
                         if not (isinstance(result, dict) and "error" in result):
                             data_blocks.append({"type": tool_name, "data": result})
-                        yield {"event": "progress", "message": progress_done}
+                        gather_steps += 1
+                        # Same message, bar advances.
+                        yield gathering(progress_message)
                     except Exception as exc:
                         logger.exception("Tool %s failed", tool_name)
                         tool_results.append(
@@ -525,11 +579,15 @@ async def run_agent_stream(
             report_status = "skipped"
             logger.info("Agent done. data_blocks=%d, intake_answers=%s", len(data_blocks), bool(intake_answers))
             if data_blocks and intake_answers:
-                yield {"event": "progress", "message": "Generating report…"}
                 report_status = "failed"
                 try:
                     t0 = time.perf_counter()
-                    report = await generate_report(intake_answers, data_blocks, text_response)
+                    report = {}
+                    async for event in generate_report_stream(intake_answers, data_blocks, text_response):
+                        if event["event"] == "report":
+                            report = event["report"]
+                        else:
+                            yield event
                     report_total = time.perf_counter() - t0
                     text_response = report.get("summary", text_response)
                     report_html = report.get("html", "")

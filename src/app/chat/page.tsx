@@ -514,11 +514,32 @@ interface Message {
   error?: boolean
 }
 
+interface Progress {
+  message: string
+  percent?: number
+}
+
+function ProgressIndicator({ progress }: { progress: Progress | null }) {
+  return (
+    <div className="w-full max-w-sm space-y-2 rounded-lg bg-secondary px-4 py-3 text-sm text-muted-foreground">
+      {progress?.message && <div>{progress.message}</div>}
+      {typeof progress?.percent === 'number' && (
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-all duration-500"
+            style={{ width: `${progress.percent}%` }}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ChatView({ initialPrompt, intakeAnswers }: { initialPrompt: string; intakeAnswers: Record<string, string> }) {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [progress, setProgress] = useState('')
+  const [progress, setProgress] = useState<Progress | null>(null)
   const [retryingIndex, setRetryingIndex] = useState<number | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -592,7 +613,7 @@ function ChatView({ initialPrompt, intakeAnswers }: { initialPrompt: string; int
   async function sendMessage(text: string) {
     setMessages((prev) => [...prev, { role: 'user', content: text }])
     setLoading(true)
-    setProgress('Connecting…')
+    setProgress({ message: 'Connecting…' })
 
     try {
       const res = await fetch('/api/chat', {
@@ -627,7 +648,7 @@ function ChatView({ initialPrompt, intakeAnswers }: { initialPrompt: string; int
           const event = JSON.parse(dataLine.slice(6))
 
           if (event.event === 'progress') {
-            setProgress(event.message)
+            setProgress({ message: event.message, percent: event.percent })
           } else if (event.event === 'complete') {
             console.log('Agent complete:', {
               report_status: event.report_status,
@@ -654,7 +675,7 @@ function ChatView({ initialPrompt, intakeAnswers }: { initialPrompt: string; int
       ])
     } finally {
       setLoading(false)
-      setProgress('')
+      setProgress(null)
       inputRef.current?.focus()
     }
   }
@@ -763,12 +784,7 @@ function ChatView({ initialPrompt, intakeAnswers }: { initialPrompt: string; int
 
           {loading && (
             <div className="flex justify-start">
-              <div className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-3 text-sm text-muted-foreground">
-                <span className="typing-dot" />
-                <span className="typing-dot [animation-delay:0.2s]" />
-                <span className="typing-dot [animation-delay:0.4s]" />
-                {progress && <span className="ml-1">{progress}</span>}
-              </div>
+              <ProgressIndicator progress={progress} />
             </div>
           )}
 
