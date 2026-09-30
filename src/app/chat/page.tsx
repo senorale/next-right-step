@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { linkify } from '@/app/components/chat/linkify'
+import ReportFeedback from '@/app/components/chat/ReportFeedback'
 
 interface IntakeOption {
   value: string
@@ -511,6 +512,7 @@ interface Message {
   content: string
   report_html?: string
   report_status?: 'success' | 'failed' | 'skipped'
+  report_viewed?: boolean
   error?: boolean
 }
 
@@ -563,7 +565,8 @@ function ChatView({ initialPrompt, intakeAnswers }: { initialPrompt: string; int
     window.location.reload()
   }, [])
 
-  function openReport(html: string) {
+  function openReport(messageIndex: number, html: string) {
+    setMessages((prev) => prev.map((m, i) => (i === messageIndex ? { ...m, report_viewed: true } : m)))
     const blob = new Blob([html], { type: 'text/html' })
     const url = URL.createObjectURL(blob)
     window.open(url, '_blank')
@@ -758,13 +761,21 @@ function ChatView({ initialPrompt, intakeAnswers }: { initialPrompt: string; int
               {msg.report_html && (
                 <div className="flex justify-start">
                   <button
-                    onClick={() => openReport(msg.report_html!)}
+                    onClick={() => openReport(i, msg.report_html!)}
                     className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
                   >
                     <FileText className="h-4 w-4" />
                     View report
                   </button>
                 </div>
+              )}
+
+              {msg.report_html && msg.report_viewed && (
+                <ReportFeedback
+                  question={messages.slice(0, i).findLast((m) => m.role === 'user')?.content ?? ''}
+                  summary={msg.content}
+                  intakeAnswers={intakeAnswers}
+                />
               )}
 
               {msg.report_status === 'failed' && !msg.report_html && (
