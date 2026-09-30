@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Resend } from 'resend'
-
-const resend = new Resend(process.env.RESEND_API_KEY)
-const FEEDBACK_TO = 'alecarvajaldev@gmail.com'
+import { sendFeedbackEmail } from '@/lib/feedback-email'
 
 const VALID_AREAS = ['app', 'agent'] as const
 const VALID_CATEGORIES: Record<string, string[]> = {
@@ -29,14 +26,7 @@ export async function POST(req: NextRequest) {
     }
 
     const areaLabel = area === 'app' ? 'Base App' : 'Counselor Agent'
-    const subject = `[Next Right Step] ${areaLabel} — ${category}`
-
-    await resend.emails.send({
-      from: 'Next Right Step Feedback <onboarding@resend.dev>',
-      to: FEEDBACK_TO,
-      subject,
-      text: `Area: ${areaLabel}\nCategory: ${category}\n\n${message.trim()}`,
-    })
+    await sendFeedbackEmail({ areaLabel, category, message: message.trim() })
 
     return NextResponse.json({ success: true })
   } catch (error) {
