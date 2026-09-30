@@ -93,6 +93,17 @@ const faqs: { q: string; a: ReactNode }[] = [
     ),
   },
   {
+    q: 'How is this different from other AI tools like ChatGPT?',
+    a: (
+      <>
+        General AI tools could find this data, but you&apos;d have to tell them where to look and how to combine it across
+        sources. We&apos;ve organized public government data (BLS, College Scorecard, NCES, O*NET) into our own
+        database. The AI looks up exact figures there instead of searching the web, and all the financial math is
+        done by code, not the AI.
+      </>
+    ),
+  },
+  {
     q: 'How do you link degrees to careers?',
     a: (
       <>
