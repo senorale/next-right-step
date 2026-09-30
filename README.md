@@ -95,17 +95,19 @@ Prereqs: Node 20+, Python 3.13, PostgreSQL, and API keys for College Scorecard (
    TS_NODE_COMPILER_OPTIONS='{"module":"CommonJS","moduleResolution":"node"}' \
      node --env-file=.env -r ts-node/register/transpile-only scripts/seed-program-debt.ts
    ```
-5. Run the frontend:
-   ```bash
-   npm run dev
-   ```
-6. Run the counselor API (for `/chat`):
+5. Set up the counselor API's Python environment (Python 3.13, one time):
    ```bash
    cd api
-   python -m venv venv && source venv/bin/activate
-   pip install -r requirements.txt
-   uvicorn main:app --reload --port 8000
+   python3.13 -m venv venv
+   venv/bin/pip install -r requirements.txt
+   cd ..
    ```
+   A venv hardcodes its own path. If you move or rename the project folder, delete `api/venv` and run this step again.
+6. Run the frontend and the counselor API together:
+   ```bash
+   npm run dev:all
+   ```
+   Logs are prefixed `[web]` and `[api]`; Ctrl-C stops both. To run them separately, use `npm run dev` (frontend, port 3000) and `npm run dev:api` (API, port 8000).
 
 Open [http://localhost:3000](http://localhost:3000).
 
