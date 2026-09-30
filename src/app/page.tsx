@@ -10,7 +10,7 @@ export default function LandingPage() {
             Find your next right step
           </h1>
           <p className="text-muted-foreground text-lg">
-            College, trades, or a new career. How do you want to find your way?
+            For anyone weighing what comes next: college, an apprenticeship, or a new career.
           </p>
         </div>
 
