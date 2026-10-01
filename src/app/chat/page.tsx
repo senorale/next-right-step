@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { linkify } from '@/app/components/chat/linkify'
 import ReportFeedback from '@/app/components/chat/ReportFeedback'
+import { EDUCATION_LEVELS, POSITIONS } from '@/app/career-path/gap'
 
 interface IntakeOption {
   value: string
@@ -185,19 +186,31 @@ const CURRENT_POSITION_STEP: IntakeStep = {
   key: 'current_position',
   question: "Where are you now?",
   subtitle: "This determines how far you need to go.",
-  options: [
-    { value: 'high_school', label: "High school" },
-    { value: 'in_college', label: "In college" },
-    { value: 'has_degree', label: "Have a degree" },
-    { value: 'working', label: "Working" },
-    { value: 'no_degree', label: "Not in school, no degree" },
-  ],
+  options: POSITIONS,
   placeholder: "",
 }
 
+const EDUCATION_LEVEL_STEP: IntakeStep = {
+  key: 'education_level',
+  question: "What's your highest level of education?",
+  subtitle: "I'll credit the school you've already done.",
+  options: EDUCATION_LEVELS.map(({ value, label }) => ({ value, label })),
+  placeholder: "",
+}
+
+const CURRENT_ROLE_STEP: IntakeStep = {
+  key: 'current_role',
+  question: "What do you do?",
+  subtitle: "I'll compare your current role to your target.",
+  placeholder: "e.g. retail manager, medical assistant, IT support...",
+}
+
+function pastSchool(answers: Record<string, string>): boolean {
+  return answers.current_position === 'working' || answers.current_position === 'looking_for_work'
+}
+
 function getCurrentFieldStep(answers: Record<string, string>): IntakeStep | null {
-  const pos = answers.current_position ?? ''
-  if (pos === 'in_college') {
+  if (answers.current_position === 'in_college') {
     return {
       key: 'current_field',
       question: "What are you studying?",
@@ -205,23 +218,41 @@ function getCurrentFieldStep(answers: Record<string, string>): IntakeStep | null
       placeholder: "e.g. biology, computer science, undeclared...",
     }
   }
-  if (pos === 'has_degree') {
-    return {
-      key: 'current_field',
-      question: "What's your degree in?",
-      subtitle: "I'll see how far along you already are.",
-      placeholder: "e.g. psychology, business, engineering...",
-    }
+  if (!pastSchool(answers)) return null
+  const level = answers.education_level
+  if (!EDUCATION_LEVELS.find((l) => l.value === level)?.hasField) return null
+  return {
+    key: 'current_field',
+    question:
+      level === 'some_college'
+        ? "What did you study?"
+        : level === 'certificate'
+          ? "What's your certificate in?"
+          : "What's your degree in?",
+    subtitle: "I'll see how far along you already are.",
+    placeholder: "e.g. psychology, business, nursing...",
   }
-  if (pos === 'working') {
-    return {
-      key: 'current_field',
-      question: "What do you do?",
-      subtitle: "I'll compare your current role to your target.",
-      placeholder: "e.g. retail manager, medical assistant, IT support...",
-    }
-  }
+}
+
+/** Starting-point questions shared by path4 and path5, in order. */
+function getStartingPointStep(answers: Record<string, string>): IntakeStep | null {
+  const keys = Object.keys(answers)
+  if (!keys.includes('current_position')) return CURRENT_POSITION_STEP
+  if (pastSchool(answers) && !keys.includes('education_level')) return EDUCATION_LEVEL_STEP
+  const fieldStep = getCurrentFieldStep(answers)
+  if (fieldStep && !keys.includes('current_field')) return fieldStep
+  if (answers.current_position === 'working' && !keys.includes('current_role')) return CURRENT_ROLE_STEP
   return null
+}
+
+function countStartingPointSteps(answers: Record<string, string>): number {
+  const pos = answers.current_position
+  if (!pos) return 3
+  if (pos === 'in_college') return 2
+  if (pos !== 'working' && pos !== 'looking_for_work') return 1
+  const level = answers.education_level
+  const hasField = !level || !!EDUCATION_LEVELS.find((l) => l.value === level)?.hasField
+  return 2 + (hasField ? 1 : 0) + (pos === 'working' ? 1 : 0)
 }
 
 function getRankByStep(answers: Record<string, string>): IntakeStep {
@@ -276,18 +307,12 @@ function getNextStep(answers: Record<string, string>): IntakeStep | null {
 
   if (path === 'path4') {
     if (!keys.includes('careers_to_compare')) return CAREERS_TO_COMPARE_STEP
-    if (!keys.includes('current_position')) return CURRENT_POSITION_STEP
-    const fieldStep = getCurrentFieldStep(answers)
-    if (fieldStep && !keys.includes('current_field')) return fieldStep
-    return null
+    return getStartingPointStep(answers)
   }
 
   if (path === 'path5') {
     if (!keys.includes('target_career')) return TARGET_CAREER_STEP
-    if (!keys.includes('current_position')) return CURRENT_POSITION_STEP
-    const fieldStep = getCurrentFieldStep(answers)
-    if (fieldStep && !keys.includes('current_field')) return fieldStep
-    return null
+    return getStartingPointStep(answers)
   }
 
   return null
@@ -305,15 +330,8 @@ function estimateTotalSteps(answers: Record<string, string>): number {
   if (path === 'path3') {
     return answers.school_situation === 'switching' ? 6 : 5
   }
-  if (path === 'path4') {
-    if (!answers.current_position) return 4
-    const fieldStep = getCurrentFieldStep(answers)
-    return fieldStep ? 4 : 3
-  }
-  if (path === 'path5') {
-    if (!answers.current_position) return 4
-    const fieldStep = getCurrentFieldStep(answers)
-    return fieldStep ? 4 : 3
+  if (path === 'path4' || path === 'path5') {
+    return 2 + countStartingPointSteps(answers)
   }
   return 5
 }
@@ -856,6 +874,17 @@ const METRIC_TO_SORT: Record<string, string> = {
   'Loan repayment rate': 'loan_repayment',
 }
 
+function startingPointLines(answers: Record<string, string>): string[] {
+  const lines: string[] = []
+  const position = POSITIONS.find((p) => p.value === answers.current_position)
+  if (position) lines.push(`- Current position: ${position.label}`)
+  const level = EDUCATION_LEVELS.find((l) => l.value === answers.education_level)
+  if (level) lines.push(`- Highest education: ${level.label}`)
+  if (answers.current_field) lines.push(`- Field of study: ${answers.current_field}`)
+  if (answers.current_role) lines.push(`- Current job: ${answers.current_role}`)
+  return lines
+}
+
 function buildPrompt(answers: Record<string, string>): string {
   const path = getPathKey(answers)
   const pathLabel = PATH_LABELS[path] ?? 'General'
@@ -913,14 +942,7 @@ function buildPrompt(answers: Record<string, string>): string {
   if (path === 'path4') {
     lines.push(`- I want to compare career paths side by side`)
     if (answers.careers_to_compare) lines.push(`- Careers to compare: ${answers.careers_to_compare}`)
-    if (answers.current_position) {
-      const posText: Record<string, string> = {
-        high_school: 'In high school', in_college: 'In college', has_degree: 'Has a degree',
-        working: 'Currently working', no_degree: 'Not in school, no degree',
-      }
-      lines.push(`- Current position: ${posText[answers.current_position] ?? answers.current_position}`)
-    }
-    if (answers.current_field) lines.push(`- Current field/study: ${answers.current_field}`)
+    lines.push(...startingPointLines(answers))
     lines.push('')
     lines.push('Compare each career path: education required, timeline, cost, salary, bright outlook, payoff timeline. Full financial analysis for all paths.')
   }
@@ -928,14 +950,7 @@ function buildPrompt(answers: Record<string, string>): string {
   if (path === 'path5') {
     lines.push(`- I have a specific career in mind`)
     if (answers.target_career) lines.push(`- Target career: ${answers.target_career}`)
-    if (answers.current_position) {
-      const posText: Record<string, string> = {
-        high_school: 'In high school', in_college: 'In college', has_degree: 'Has a degree',
-        working: 'Currently working', no_degree: 'Not in school, no degree',
-      }
-      lines.push(`- Current position: ${posText[answers.current_position] ?? answers.current_position}`)
-    }
-    if (answers.current_field) lines.push(`- Current field/study: ${answers.current_field}`)
+    lines.push(...startingPointLines(answers))
     lines.push('')
     lines.push('Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected salary, time to recoup. Show gap analysis if I have relevant education.')
   }

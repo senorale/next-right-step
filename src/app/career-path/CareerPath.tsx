@@ -12,7 +12,7 @@ import PayoffSummary from '../components/paths/PayoffSummary'
 import { computeFinancials, HS_SALARY } from '../components/paths/finance'
 import { money, schoolYears } from '../components/paths/format'
 import type { CareerCost, Degree, Occupation } from '../components/paths/types'
-import { computeGap, HELD_CREDENTIALS, POSITIONS, type Position } from './gap'
+import { computeGap, EDUCATION_LEVELS, POSITIONS, type EducationLevel, type Position } from './gap'
 
 function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -33,9 +33,9 @@ export default function CareerPath() {
   const [target, setTarget] = useState<CareerCost | null>(null)
   const [loading, setLoading] = useState(false)
   const [position, setPosition] = useState<Position | null>(null)
+  const [level, setLevel] = useState<EducationLevel | null>(null)
   const [degree, setDegree] = useState<Degree | null>(null)
   const [yearsDone, setYearsDone] = useState(1)
-  const [heldYears, setHeldYears] = useState(4)
   const [salary, setSalary] = useState<number | null>(null)
 
   const chooseTarget = async (o: Occupation) => {
@@ -45,10 +45,22 @@ export default function CareerPath() {
     setLoading(false)
   }
 
-  const inSchool = position === 'in_college' || position === 'has_degree'
-  const completedYears = position === 'in_college' ? yearsDone : position === 'has_degree' ? heldYears : 0
-  const relevant = !!(target && degree && degree.occupationIds.includes(target.occupation.id))
-  const gap = target && position ? computeGap({ cost: target, completedYears, relevant }) : null
+  const pastSchool = position === 'working' || position === 'looking_for_work'
+  const levelInfo = pastSchool ? EDUCATION_LEVELS.find((l) => l.value === level) : undefined
+  const showField = position === 'in_college' || !!levelInfo?.hasField
+  const askYears = position === 'in_college' || level === 'some_college'
+  const completedYears = askYears ? yearsDone : (levelInfo?.years ?? 0)
+  const fieldQuestion =
+    position === 'in_college'
+      ? 'What are you studying?'
+      : level === 'some_college'
+        ? 'What did you study?'
+        : level === 'certificate'
+          ? 'What is your certificate in?'
+          : 'What is your degree in?'
+  const relevant = !!(showField && target && degree && degree.occupationIds.includes(target.occupation.id))
+  const ready = !!position && (!pastSchool || !!level)
+  const gap = target && ready ? computeGap({ cost: target, completedYears, relevant }) : null
 
   const hasIncome = position === 'working' && salary != null && salary > 0
   const currentIncome = hasIncome ? (salary as number) : HS_SALARY
@@ -103,40 +115,40 @@ export default function CareerPath() {
               ))}
             </div>
 
-            {inSchool && (
+            {pastSchool && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">What is your highest level of education?</p>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Highest level of education">
+                  {EDUCATION_LEVELS.map((l) => (
+                    <Chip key={l.value} active={level === l.value} onClick={() => setLevel(l.value)}>
+                      {l.label}
+                    </Chip>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {showField && (
               <div className="space-y-3">
-                <p className="text-sm font-medium">
-                  {position === 'in_college' ? 'What are you studying?' : 'What is your degree in?'}
-                </p>
+                <p className="text-sm font-medium">{fieldQuestion}</p>
                 {degree ? (
                   <SelectedPills items={[{ key: degree.id, label: degree.name }]} onRemove={() => setDegree(null)} />
                 ) : (
                   <DegreeSearch onSelect={setDegree} />
                 )}
+              </div>
+            )}
 
-                {position === 'in_college' ? (
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Years completed</p>
-                    <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Years completed">
-                      {[1, 2, 3].map((y) => (
-                        <Chip key={y} active={yearsDone === y} onClick={() => setYearsDone(y)}>
-                          {y}
-                        </Chip>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Highest degree</p>
-                    <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Highest degree">
-                      {HELD_CREDENTIALS.map((c) => (
-                        <Chip key={c.years} active={heldYears === c.years} onClick={() => setHeldYears(c.years)}>
-                          {c.label}
-                        </Chip>
-                      ))}
-                    </div>
-                  </div>
-                )}
+            {askYears && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Years completed</p>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Years completed">
+                  {[1, 2, 3].map((y) => (
+                    <Chip key={y} active={yearsDone === y} onClick={() => setYearsDone(y)}>
+                      {y}
+                    </Chip>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -167,7 +179,8 @@ export default function CareerPath() {
                   <p className="text-sm text-muted-foreground">Now</p>
                   <p className="font-medium">
                     {positionLabel}
-                    {degree && inSchool ? `, ${degree.name}` : ''}
+                    {levelInfo ? `, ${levelInfo.label}` : ''}
+                    {degree && showField ? `, ${degree.name}` : ''}
                     {hasIncome ? `, earning ${money(currentIncome)}/yr` : ''}
                   </p>
                 </li>
@@ -180,7 +193,7 @@ export default function CareerPath() {
                         ? `You already have the ${schoolYears(gap.requiredYears)} of school this career typically needs.`
                         : `${schoolYears(gap.remainingYears)} left of ${schoolYears(gap.requiredYears)} (${target.credentialLabel?.toLowerCase() ?? 'degree'})`}
                   </p>
-                  {inSchool && degree && gap.requiredYears > 0 && (
+                  {showField && degree && completedYears > 0 && gap.requiredYears > 0 && (
                     <p className="text-sm text-muted-foreground">
                       {gap.relevant
                         ? `${degree.name} is a related field, so all ${schoolYears(completedYears)} count.`

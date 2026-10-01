@@ -316,14 +316,14 @@ User is at or committed to a specific school, comparing programs.
 - search_occupations for occupations linked to their programs (for bright outlook, education data, BLS salary)
 
 path4 - COMPARE CAREER TRACKS:
-User wants to compare 2+ career paths side by side. Check current_position and current_field for their starting point.
+User wants to compare 2+ career paths side by side. Check current_position, education_level, current_field, and current_role for their starting point.
 - search_occupations for EACH career they named
 - If user is working: search_occupations for their current role (for baseline comparison)
 - get_tuition_medians for cost baseline (education paths may require degrees)
 - search_occupations for related occupations in each field
 
 path5 - PATH TO A SPECIFIC CAREER:
-User has a target occupation and needs the roadmap from current position.
+User has a target occupation and needs the roadmap from current position. Check current_position, education_level, current_field, and current_role for their starting point.
 - search_occupations for target occupation
 - If user is working: search_occupations for their current role (to show gap)
 - get_tuition_medians if degree path is needed

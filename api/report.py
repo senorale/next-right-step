@@ -60,7 +60,7 @@ PATH-SPECIFIC CONTENT (intake "path_type"):
 path1 (college vs vocational vs work): options are exactly five rows: HS diploma baseline (zero cost, baseline salary), Cashier, Electrician, Bachelor's degree median, user's chosen occupation.
 path2 (comparing schools): options are the top 5 schools ranked by the user's chosen metric. A section table shows ONLY the metrics the user toggled in compare_metrics.
 path3 (comparing programs at school): options are the programs. A section compares school-specific earnings (College Scorecard) with national occupation salary (BLS), labeling sources, plus bright outlook status from O*NET.
-path4 (compare career tracks): options are the careers. Use current_position and current_field for context (credit for existing education, gap from current role).
+path4 (compare career tracks): options are the careers. Use current_position, education_level, current_field, and current_role for context (credit for existing education, gap from current role).
 path5 (path to career): options are the realistic routes to the target. One section is a roadmap: bullets as ordered steps with timeline, plus gap analysis between current and required education.
 """
 

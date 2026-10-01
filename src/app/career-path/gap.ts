@@ -1,20 +1,39 @@
 import type { CareerCost } from '../components/paths/types'
 
-export type Position = 'high_school' | 'in_college' | 'has_degree' | 'working' | 'no_degree'
+export type Position = 'high_school' | 'in_college' | 'working' | 'looking_for_work'
 
 export const POSITIONS: { value: Position; label: string }[] = [
   { value: 'high_school', label: 'In high school' },
   { value: 'in_college', label: 'In college' },
-  { value: 'has_degree', label: 'Have a degree' },
   { value: 'working', label: 'Working' },
-  { value: 'no_degree', label: 'Not in school, no degree' },
+  { value: 'looking_for_work', label: 'Looking for work' },
 ]
 
-/** Years of school each held credential represents. */
-export const HELD_CREDENTIALS: { years: number; label: string }[] = [
-  { years: 2, label: "Associate's" },
-  { years: 4, label: "Bachelor's" },
-  { years: 6, label: "Master's" },
+export type EducationLevel =
+  | 'no_hs'
+  | 'hs'
+  | 'some_college'
+  | 'certificate'
+  | 'associate'
+  | 'bachelor'
+  | 'master'
+  | 'doctoral'
+
+/**
+ * Highest education for people who are working or looking for work.
+ * `years` is school credited toward a career; null means ask for years completed.
+ * `hasField` means ask what the education was in.
+ * Certificates count 0 years, matching how O*NET-based career years treat them.
+ */
+export const EDUCATION_LEVELS: { value: EducationLevel; label: string; years: number | null; hasField: boolean }[] = [
+  { value: 'no_hs', label: 'No high school diploma', years: 0, hasField: false },
+  { value: 'hs', label: 'High school diploma or GED', years: 0, hasField: false },
+  { value: 'some_college', label: 'Some college, no degree', years: null, hasField: true },
+  { value: 'certificate', label: 'Certificate', years: 0, hasField: true },
+  { value: 'associate', label: "Associate's", years: 2, hasField: true },
+  { value: 'bachelor', label: "Bachelor's", years: 4, hasField: true },
+  { value: 'master', label: "Master's", years: 6, hasField: true },
+  { value: 'doctoral', label: 'Doctoral or professional', years: 8, hasField: true },
 ]
 
 const UNDERGRAD_YEARS = 4
