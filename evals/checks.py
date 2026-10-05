@@ -1,40 +1,22 @@
 """
-Deterministic checks on what the user sees: the chat reply and the rendered
-report HTML. They don't depend on how the report is built, so the same checks
-benchmark any change to prompts or report code.
+Number checks on the report the model wrote: every figure in its text must come
+from the code-built data, every stated difference must be the real gap between
+the rows it names, and the figures a case requires must appear. Words aren't
+checked: matching wording is too weak a test (revisit later).
 """
 
 import html
 import re
 
 # Prose = text the LLM wrote: chat reply, headline, bullets, "What this means
-# for you", limitations. Tables, charts, the notice and the footer are code.
+# for you", limitations. Tables, charts, the notice, and the code-built notes
+# are code.
 PROSE_PATTERNS = [
     r'<p class="headline">(.*?)</p>',
     r'<p class="means">(.*?)</p>',
     r"<li>(.*?)</li>",
 ]
-
-DOLLAR = re.compile(r"\$\s?(?!0\b)\d[\d,]*")  # $0 needs no statistic label
-# "your" marks figures the user gave, which aren't national statistics.
-STAT_WORD = re.compile(r"\b(median|average|mean|your)\b", re.I)
-# "You earn / you're making / you'd be paid", "your salary of $X", "your current role pays".
-USER_AS_EARNER = re.compile(
-    r"\b(you|you're|you are|you'd|you'll|you've)\s+(\w+\s+){0,3}?(earn|earns|earning|earned|make|makes|making|paid)\b"
-    r"|\byour\s+(current\s+)?(salary|pay|income|wage|wages|earnings)\b[^.]{0,40}\$"
-    r"|\byour\s+(current\s+)?(role|job|position)\s+pays\b",
-    re.I,
-)
-STARTING_PAY = re.compile(r"\b(entry[- ]level|entry|starting|initial) (pay|salary|salaries|wage|wages|earnings)\b", re.I)
-NEGATED_STARTING_PAY = re.compile(r"\bnot\b[^.]{0,20}\b(entry|starting|initial)", re.I)
-BANNED = re.compile(r"\b(majors?|break(s|ing)?[- ]even)\b", re.I)
-# Salaries, debt, and costs in the data are medians.
-AVERAGE_SALARY = re.compile(
-    r"\b(average|avg|mean)\b[^.]{0,40}\b(salary|salaries|earn\w*|wage|wages|pay|debt|cost|costs|price)\b"
-    r"|\b(salary|salaries|earn\w*|wage|wages|pay|debt|cost|costs|price)\b[^.]{0,40}\b(average|averages|avg)\b",
-    re.I,
-)
-PAYOFF_GUESS = re.compile(r"\b(pay(s|ing)?[- ]?off|recoup\w*)\b[^.]*?(\d|\bfew\b|\bseveral\b)", re.I)
+GAP_PHRASE = re.compile(r"\$\s?(\d[\d,]*)\s+(more|less|higher|lower)\b[^.$]*?\bthan\b([^.$]*)", re.I)
 
 
 def _text(fragment: str) -> str:
@@ -49,7 +31,8 @@ def _sentences(texts: list[str]) -> list[str]:
 
 
 def prose(response: str, report_html: str) -> list[str]:
-    body = re.sub(r"<svg.*?</svg>", "", report_html, flags=re.S)
+    """Text the report model wrote; charts and the code-built notes are left out."""
+    body = re.sub(r'<svg.*?</svg>|<ul class="note">.*?</ul>', "", report_html, flags=re.S)
     texts = [response]
     for pattern in PROSE_PATTERNS:
         texts += [_text(m) for m in re.findall(pattern, body, flags=re.S)]
@@ -61,48 +44,95 @@ def _dollars(text: str) -> list[float]:
 
 
 def _report_figures(report_html: str) -> list[float]:
-    """Dollar figures code rendered in tables and charts."""
+    """Dollar figures code rendered: table cells, chart values, cost notes."""
     cells = re.findall(r"<td>(.*?)</td>", report_html, flags=re.S)
     cells += [li for ul in re.findall(r'<ul class="note">(.*?)</ul>', report_html, flags=re.S) for li in re.findall(r"<li>(.*?)</li>", ul)]
     values = re.findall(r'class="val">(.*?)<', report_html)
     return [v for t in cells + values for v in _dollars(html.unescape(t))]
 
 
-def _matches(value: float, figures: list[float], tolerance: float = 0.02) -> bool:
-    """True when value is one of the figures, or the gap between two, within tolerance."""
-    candidates = figures + [abs(a - b) for i, a in enumerate(figures) for b in figures[i + 1:]]
-    return any(abs(value - c) <= tolerance * max(c, 1) for c in candidates)
+def _same(value: float, exact: float) -> bool:
+    """The exact figure, or (for amounts of $1,000 or more) the figure rounded to
+    the nearest hundred or thousand."""
+    if abs(exact) < 1000:
+        return value == exact
+    return any(value == round(exact, -digits) for digits in (0, 2, 3))
+
+
+def _breakdown_rows(report_html: str) -> dict[str, dict]:
+    """Rows of the code-built financial breakdown: name -> median salary and debt."""
+    section = report_html.split("<h2>Financial breakdown</h2>", 1)[-1]
+    rows = {}
+    for row in re.findall(r"<tr>(.*?)</tr>", section, flags=re.S):
+        cells = [_text(c) for c in re.findall(r"<td>(.*?)</td>", row, flags=re.S)]
+        if len(cells) >= 7:
+            money = [_dollars(c) for c in cells]
+            rows[cells[0]] = {"debt": money[2][0] if money[2] else 0.0, "salary": money[6][0] if money[6] else 0.0}
+    return rows
+
+
+def _aliases(name: str) -> list[str]:
+    """Words a sentence uses for a row, e.g. "Lawyers" -> "lawyer"."""
+    base = re.sub(r"\(.*?\)", "", name).lower()
+    if "high school" in base:
+        return ["high school", "diploma"]
+    if "bachelor" in base:
+        return ["bachelor"]
+    last = re.findall(r"[a-z]+", base)[-1]
+    return [last.rstrip("s")]
+
+
+def _wrong_gaps(sentence: str, rows: dict[str, dict]) -> list[str]:
+    """For "$X more ... than <row>": X must be the gap between the row named after
+    "than" and another row the sentence names before it."""
+    problems = []
+    for match in GAP_PHRASE.finditer(sentence):
+        amount, after = match.group(1), match.group(3)
+        value = float(amount.replace(",", ""))
+        before = sentence[: match.start(3)].lower()
+        compared = [n for n in rows if any(a in after.lower() for a in _aliases(n))]
+        subjects = [n for n in rows if any(a in before for a in _aliases(n)) and n not in compared]
+        if not compared or not subjects:
+            continue
+        gaps = [
+            abs(rows[s][metric] - rows[c][metric])
+            for c in compared for s in subjects for metric in ("salary", "debt")
+        ]
+        if not any(_same(value, g) for g in gaps):
+            problems.append(f"${amount} isn't the gap between {subjects} and {compared}: {sentence[:120]}")
+    return problems
+
+
+def _numbers(text: str) -> list[float]:
+    return [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", text)]
 
 
 def run_checks(response: str, report_html: str, expect: dict | None = None) -> dict[str, dict]:
     """Each check -> {"pass": bool, "hits": [offending text]}."""
-    sentences = _sentences(prose(response, report_html))
-    captions = [_text(c) for c in re.findall(r"<figcaption>(.*?)</figcaption>", report_html, flags=re.S)]
-    visible = response + _text(report_html)
+    texts = prose(response, report_html)
+    sentences = _sentences(texts)
     figures = _report_figures(report_html)
-
-    def hits(pred) -> list[str]:
-        return [s for s in sentences if pred(s)]
+    rows = _breakdown_rows(report_html)
+    gaps = [abs(a - b) for i, a in enumerate(figures) for b in figures[i + 1:]]
 
     results = {
         "report_rendered": [] if report_html else ["no report HTML"],
-        "notice_at_top": [] if re.search(r"<main>\s*<p class=\"notice\">", report_html) else ["notice missing"],
-        "no_user_as_earner": hits(lambda s: USER_AS_EARNER.search(s)),
-        # The BLS reporting cap is a threshold, not a statistic.
-        "dollar_figures_labeled": hits(lambda s: DOLLAR.search(s) and not STAT_WORD.search(s) and "cap" not in s.lower()),
-        "charts_have_source": [c for c in captions if "Source:" not in c],
-        "no_starting_pay": hits(lambda s: STARTING_PAY.search(s) and not NEGATED_STARTING_PAY.search(s)),
-        "no_banned_words": hits(lambda s: BANNED.search(s)),
-        "no_payoff_guesses": hits(lambda s: PAYOFF_GUESS.search(s)),
-        "no_average_salary": hits(lambda s: AVERAGE_SALARY.search(s)),
-        "prose_figures_in_report": hits(lambda s: any(not _matches(v, figures) for v in _dollars(s))),
-        "no_template_leaks": [m for m in re.findall(r"\{\{[^}]*\}\}|\*\*", visible)],
+        # Every dollar figure in the text is a code-built figure or a gap between two.
+        "figures_from_data": [
+            s for s in sentences
+            if any(not any(_same(v, f) for f in figures + gaps) for v in _dollars(s))
+        ],
+        "gaps_match_rows": [p for s in sentences for p in _wrong_gaps(s, rows)],
     }
-    if expect:
-        # Per-case expectations from cases.jsonl, matched against the LLM's text.
-        text = " ".join(prose(response, report_html))
-        results["case_expectations"] = (
-            [f"missing: {p}" for p in expect.get("must_mention", []) if not re.search(p, text, re.I)]
-            + [f"should not mention: {p}" for p in expect.get("must_not_mention", []) if re.search(p, text, re.I)]
-        )
+    if expect and expect.get("required_figures"):
+        found = _numbers(" ".join(texts))
+        results["required_figures"] = [
+            f"missing {n:,}" for n in expect["required_figures"] if not any(_same(v, n) for v in found)
+        ]
+    if expect and expect.get("headline_figures"):
+        # The headline is also the chat reply (response), the first thing the user reads.
+        found = _numbers(response)
+        results["headline_figures"] = [
+            f"headline missing {n:,}" for n in expect["headline_figures"] if not any(_same(v, n) for v in found)
+        ]
     return {name: {"pass": not h, "hits": h} for name, h in results.items()}
