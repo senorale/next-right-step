@@ -11,9 +11,13 @@ import html
 import math
 from datetime import date
 
+# BLS median usual weekly earnings for high school graduates x 52. The prompt's
+# bachelor's figure (77636) is the same measure; both match
+# src/app/constants/college_related_constants.ts.
 HS_SALARY = 46_748
-LOAN_RATE = 0.0653
+LOAN_RATE = 0.065  # STUDENT_LOAN_INTEREST_RATE in college_related_constants.ts
 REPAYMENT_YEARS = 20
+BLS_SALARY_CAP = 239_200  # OEWS top-codes annual wages; a median at the cap may be higher
 
 FIGURES_NOTICE = (
     "Every figure in this report (salaries, earnings, costs, and debt) is a median or average across many "
@@ -42,7 +46,7 @@ RESPOND WITH ONLY VALID JSON matching this shape:
   "sections": [
     {
       "title": "Section heading",
-      "what_it_means": "One 'What this means for you' sentence.",
+      "what_it_means": "One 'What this means for you' sentence: a concrete takeaway for this user, not a description of the section.",
       "bullets": ["optional short point"],
       "table": {"columns": ["School", "Net price"], "rows": [["UF", "$9,400"]]},
       "chart": {"title": "Median salary", "x_label": "Annual Salary ($)", "y_label": "Occupation", "unit": "usd", "bars": [{"label": "Electrician", "value": 61590}]}
@@ -60,15 +64,17 @@ FIELD RULES:
 - sections: 2-4 sections ordered by importance to this user. table, chart, and bullets are each optional; include only what adds value. Do not repeat the financial breakdown. Short chart labels (e.g. "CO Mines"). chart unit is one of: usd, percent, years, number.
 - Table cells are short display strings, already formatted.
 - Never use the words "major" or "break-even". Say "degree" or "program", and "payoff timeline".
-- BLS caps reported salaries at $239,200/yr; note this where relevant.
+- Salaries, debt, and costs are medians: say "median", never "average". Salaries span all experience levels, so never "starting" or "entry-level".
+- Use only figures from the tool data or path1_options. If a figure isn't there, don't estimate it; say it in words.
+- Don't assume the user's past school counts toward a new career; how much transfers depends on the field and program.
 - For income-based net price data, highlight the bracket closest to the user's situation if known.
 
 PATH-SPECIFIC CONTENT (intake "path_type"):
-path1 (college vs vocational vs work): options are exactly five rows: HS diploma baseline (zero cost, baseline salary), Cashier, Electrician, Bachelor's degree median, user's chosen occupation.
+path1 (college vs vocational vs work): when path1_options is given, it is the five options, built by code: years of school, median student debt, and median salary for each. Code renders the charts and financial breakdown, so return "options": [] and no charts or tables. Write two sections from those numbers, never changing or recomputing them: how the options compare on median salary and years of school, and what each education path costs in median debt and time out of work. The main thing to catch: when the chosen occupation's graduate_school_required is true (e.g. law, medicine), lead the headline with it and state its years_beyond_bachelors as years beyond a bachelor's, plus the added debt and extra years out of work; when it is false, say no graduate school is required. When a row has user_numbers true, it is the chosen occupation with the user's own tuition or expected salary (cost_basis says which); compare it with the national median row and say which figures are theirs. Without path1_options, options are exactly five rows: HS diploma baseline (zero cost, baseline salary), Cashier, Electrician, Bachelor's degree median (expected_salary 77636, the BLS median for bachelor's degree holders), user's chosen occupation.
 path2 (comparing schools): options are the top 5 schools ranked by the user's chosen metric. A section table shows ONLY the metrics the user toggled in compare_metrics.
 path3 (comparing programs at school): options are the programs. A section compares school-specific earnings (College Scorecard) with national occupation salary (BLS), labeling sources, plus bright outlook status from O*NET.
-path4 (compare career tracks): options are the careers. Use current_position, education_level, current_field, and current_role for context (credit for existing education, gap from current role).
-path5 (path to career): options are the realistic routes to the target. One section is a roadmap: bullets as ordered steps with timeline, plus gap analysis between current and required education.
+path4 (compare career tracks): options are the careers. Use current_position, education_level, current_field, and current_role for context (gap from current role), with years_in_school from each career's typical years of school. If compare_to_current is "no", options are only the named careers (no current-job row) and the baseline is current_salary_value as "Your current salary" when given, else the high school median.
+path5 (path to career): options are the realistic routes to the target. One section is a roadmap: bullets as ordered steps with timeline, plus the education the target requires.
 """
 
 
@@ -106,16 +112,26 @@ def monthly_payment(principal: float, rate: float = LOAN_RATE, years: int = REPA
 
 
 def compute_financials(option: dict, baseline_salary: float) -> dict:
+    """Options built in code (path1) carry total "debt" and follow the web app's
+    math: total = debt + loan interest + earnings given up while in school.
+    LLM-built options carry annual_cost and leave interest out."""
     years = _num(option.get("years_in_school"))
-    education_cost = _num(option.get("annual_cost")) * years
     opportunity_cost = baseline_salary * years
-    total = education_cost + opportunity_cost
+    if "debt" in option:
+        education_cost = _num(option.get("debt"))
+        interest = monthly_payment(education_cost) * REPAYMENT_YEARS * 12 - education_cost
+        total = education_cost + max(interest, 0) + opportunity_cost
+    else:
+        education_cost = _num(option.get("annual_cost")) * years
+        total = education_cost + opportunity_cost
     salary = _num(option.get("expected_salary"))
     delta = salary - baseline_salary
     if total == 0:
         payoff = 0.0
     elif delta > 0:
-        payoff = total / delta
+        # Counted from the first day of school: years in school, then the
+        # years of higher pay it takes to recover the total investment.
+        payoff = years + total / delta
     else:
         payoff = None
     return {
@@ -144,7 +160,7 @@ def _short(label: str, limit: int = 20) -> str:
     return label if len(label) <= limit else label[: limit - 1].rstrip() + "…"
 
 
-def bar_chart(title: str, x_label: str, y_label: str, bars: list[dict], unit: str = "number") -> str:
+def bar_chart(title: str, x_label: str, y_label: str, bars: list[dict], unit: str = "number", source: str = "") -> str:
     """Horizontal bar chart: labels left of bars, values right, sorted desc, gridlines."""
     bars = sorted(
         ({"label": str(b.get("label", "")), "value": _num(b.get("value"))} for b in bars),
@@ -179,7 +195,8 @@ def bar_chart(title: str, x_label: str, y_label: str, bars: list[dict], unit: st
         f'transform="rotate(-90 14 {top + plot_h / 2:.1f})">{_esc(y_label)}</text>'
     )
     parts.append("</svg>")
-    return f'<figure><figcaption>{_esc(title)}</figcaption>{"".join(parts)}</figure>'
+    src = f'<span class="src">Source: {_esc(source)}</span>' if source else ""
+    return f'<figure><figcaption>{_esc(title)}{src}</figcaption>{"".join(parts)}</figure>'
 
 
 def _table(columns: list, rows: list) -> str:
@@ -211,16 +228,59 @@ def _financial_section(options: list[dict], baseline_salary: float, baseline_lab
             payoff_bars.append({"label": opt.get("short_label") or opt.get("name", ""), "value": payoff})
     table = _table(
         ["Option", "Education", "Education cost", "Opportunity cost", "Total investment",
-         "Monthly loan payment", "Expected salary", "Payoff timeline"],
+         "Monthly loan payment", "Expected salary", "Payoff (years from starting school)"],
         rows,
     )
-    chart = bar_chart("Payoff timeline (options with an education cost)", "Years after graduation to recoup investment", "Option", payoff_bars, "years")
+    chart = bar_chart(
+        "Payoff timeline: years from the first day of school", "Years from starting school until the cost is recovered", "Option",
+        payoff_bars, "years", "Computed from each option's cost and expected salary in the table above",
+    )
+    debt_based = any("debt" in o for o in options)
+    capped = [o.get("name", "") for o in options if _num(o.get("expected_salary")) >= BLS_SALARY_CAP]
+    cap_note = (
+        f'<p class="note">BLS reports wages above {_usd(BLS_SALARY_CAP)} as {_usd(BLS_SALARY_CAP)}, '
+        f'so the real median for {_esc(", ".join(capped))} may be higher.</p>'
+        if capped else ""
+    )
+    cost_notes = "".join(
+        f"<li>{_esc(o.get('name', ''))}: {_esc(o['cost_basis'])}</li>"
+        for o in options if o.get("cost_basis") and _num(o.get("years_in_school")) > 0
+    )
     return (
         '<section><h2>Financial breakdown</h2>'
         f'<p class="note">Baseline: {_esc(baseline_label)} at {_usd(baseline_salary)}/yr. '
-        f'Loans at {LOAN_RATE * 100:.2f}% over {REPAYMENT_YEARS} years. '
-        'Opportunity cost is baseline earnings given up while in school.</p>'
-        f"{table}{chart}</section>"
+        f'Loans at {LOAN_RATE * 100:.1f}% over {REPAYMENT_YEARS} years. '
+        + ("Education cost is median student debt (College Scorecard); total investment adds loan interest. "
+           if debt_based else "")
+        + 'Opportunity cost is baseline earnings given up while in school. '
+        'Expected salaries are medians, not starting pay.'
+        + (" Rows marked (your numbers) use the tuition and salary you gave instead, as listed below."
+           if any(o.get("user_numbers") for o in options) else "")
+        + '</p>'
+        f"{table}{cap_note}"
+        '<p class="note"><strong>About the payoff timeline:</strong> it counts from the first day of school, '
+        'assumes full-time school with no income in the meantime, and assumes the median salary right after '
+        'graduating. Starting salaries are often lower than the median, so the real payoff usually takes longer.</p>'
+        + (f'<p class="note">Education cost sources:</p><ul class="note">{cost_notes}</ul>' if cost_notes else "")
+        + f"{chart}</section>"
+    )
+
+
+def _salary_chart(options: list[dict]) -> str:
+    """Salary comparison for code-built options, labeled with its sources."""
+    # Only national figures belong in a chart titled median salary.
+    bars = [
+        {"label": o.get("short_label") or o.get("name", ""), "value": o.get("expected_salary")}
+        for o in options if not o.get("user_numbers")
+    ]
+    return (
+        '<section><h2>Median salary by option</h2>'
+        + bar_chart(
+            "Median annual salary", "Median annual salary", "Option", bars, "usd",
+            "BLS OEWS May 2024 median annual wage (occupations); BLS median weekly earnings x 52 "
+            "(high school diploma, bachelor's degree)",
+        )
+        + "</section>"
     )
 
 
@@ -258,6 +318,7 @@ th,td{padding:8px 10px;border-bottom:1px solid #e5e7eb;text-align:left;vertical-
 th{background:#f3f4f6;font-weight:600;white-space:nowrap}
 figure{margin:0 0 16px}
 figcaption{font-weight:600;margin:0 0 4px}
+.src{display:block;color:#6b7280;font-size:.8rem;font-weight:400}
 svg{width:100%;height:auto;font-size:12px}
 svg .grid{stroke:#e5e7eb}
 svg .bar{fill:#2563eb}
@@ -279,10 +340,14 @@ SAVE_BUTTON = (
 )
 
 
-def render_report(spec: dict) -> str:
+def render_report(spec: dict, fixed_options: list[dict] | None = None) -> str:
+    """fixed_options: options built in code (path1). They replace the LLM's
+    options and get a code-rendered salary chart."""
     baseline_salary = _num(spec.get("baseline_salary"), HS_SALARY) or HS_SALARY
     baseline_label = spec.get("baseline_label") or "High school diploma"
-    options = [o for o in spec.get("options") or [] if isinstance(o, dict)]
+    if fixed_options:
+        baseline_salary, baseline_label = HS_SALARY, "High school diploma"
+    options = fixed_options or [o for o in spec.get("options") or [] if isinstance(o, dict)]
     sections = [s for s in spec.get("sections") or [] if isinstance(s, dict)]
     limitations = spec.get("limitations") or []
 
@@ -291,6 +356,10 @@ def render_report(spec: dict) -> str:
         "<h1>Your Next Right Step report</h1>",
         f'<p class="headline">{_esc(spec.get("headline", ""))}</p>',
     ]
+    if fixed_options:
+        # Code renders the path1 charts with sources; drop any the LLM added.
+        sections = [{k: v for k, v in sec.items() if k != "chart"} for sec in sections]
+        body.append(_salary_chart(fixed_options))
     body.extend(_section(s) for s in sections)
     body.append(_financial_section(options, baseline_salary, baseline_label))
     if limitations:

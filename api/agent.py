@@ -1,14 +1,14 @@
 """
-Agent module: defines tools and runs the Claude tool-use loop.
+Agent module: defines tools and runs the model's tool-use loop.
 
 How it works:
-1. We define "tools" — JSON schemas that tell Claude what functions it can call.
-2. We send the user's message to Claude along with the tool definitions.
-3. Claude either responds directly OR returns a "tool_use" block asking to call
-   a function with specific arguments.
-4. We execute that function locally, send the result back to Claude, and let it
-   decide whether to respond or call another tool.
-5. This loop continues until Claude produces a final text response.
+1. We define "tools": JSON schemas that tell the model what functions it can call.
+2. We send the user's message to the model (Gemini by default, see llm.py) along with the tool definitions.
+3. The model either responds directly OR returns tool calls asking to run
+   functions with specific arguments.
+4. We execute those functions locally, send the results back, and let the
+   model decide whether to respond or call another tool.
+5. This loop continues until the model produces a final text response.
 """
 
 import asyncio
@@ -21,7 +21,7 @@ from uuid import UUID
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="../.env")
 
-import anthropic
+import openai
 from db import (
     get_tuition_medians,
     run_sql,
@@ -29,13 +29,13 @@ from db import (
     get_school_programs,
     search_occupations,
 )
+from career_cost import path1_options
+from user_numbers import extract_user_numbers
 from report import REPORT_SPEC_SYSTEM_PROMPT, render_report
 
 logger = logging.getLogger(__name__)
 
-client = anthropic.AsyncAnthropic()
-MODEL = "claude-haiku-4-5-20251001"
-REPORT_MODEL = "claude-haiku-4-5-20251001"
+from llm import MODEL, REPORT_MODEL, client  # noqa: E402
 # The LLM returns compact JSON content; report.py renders the HTML.
 REPORT_SPEC_MAX_TOKENS = 4096
 # Typical report output size, used to estimate progress while the report streams.
@@ -74,26 +74,14 @@ def _json_default(obj):
 
 
 def _trim_history(messages: list[dict]) -> list[dict]:
-    """Keep the last MAX_HISTORY_MESSAGES, but never start on a dangling
-    tool_result or assistant tool_use — Anthropic requires tool_use/tool_result
-    to be paired, so drop leading fragments until the first message is a
-    plain user text turn."""
+    """Keep the last MAX_HISTORY_MESSAGES, but never start on a dangling tool
+    message or assistant tool call: tool calls and their results must stay
+    paired, so drop leading messages until the first one is a user turn."""
     if len(messages) <= MAX_HISTORY_MESSAGES:
         return messages
     trimmed = messages[-MAX_HISTORY_MESSAGES:]
-    while trimmed:
-        first = trimmed[0]
-        content = first.get("content")
-        is_tool_result = (
-            first["role"] == "user"
-            and isinstance(content, list)
-            and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
-        )
-        is_assistant_fragment = first["role"] == "assistant"
-        if is_tool_result or is_assistant_fragment:
-            trimmed = trimmed[1:]
-        else:
-            break
+    while trimmed and trimmed[0]["role"] != "user":
+        trimmed = trimmed[1:]
     return trimmed
 
 
@@ -102,32 +90,21 @@ def _extract_data_blocks(messages: list[dict]) -> list[dict]:
     tool_names: dict[str, str] = {}
     blocks: list[dict] = []
     for msg in messages:
-        content = msg.get("content", [])
-        if not isinstance(content, list):
-            continue
-        if msg["role"] == "assistant":
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "tool_use":
-                    tool_names[item["id"]] = item["name"]
-        elif msg["role"] == "user":
-            for item in content:
-                if not isinstance(item, dict) or item.get("type") != "tool_result":
-                    continue
-                if item.get("is_error"):
-                    continue
-                raw = item.get("content", "")
-                try:
-                    data = json.loads(raw) if isinstance(raw, str) else raw
-                    if isinstance(data, dict) and "error" not in data:
-                        tool_name = tool_names.get(item.get("tool_use_id", ""), "unknown")
-                        blocks.append({"type": tool_name, "data": data})
-                except (json.JSONDecodeError, TypeError):
-                    pass
+        if msg.get("role") == "assistant":
+            for call in msg.get("tool_calls") or []:
+                tool_names[call["id"]] = call["function"]["name"]
+        elif msg.get("role") == "tool":
+            try:
+                data = json.loads(msg.get("content", ""))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if (isinstance(data, dict) and "error" not in data) or isinstance(data, list):
+                blocks.append({"type": tool_names.get(msg.get("tool_call_id", ""), "unknown"), "data": data})
     return blocks
 
 
 def _retry_delay_for(exc: Exception) -> float:
-    """Honor Anthropic's retry-after header on 429/5xx when present."""
+    """Honor the retry-after header on 429/5xx when present."""
     response = getattr(exc, "response", None)
     if response is not None:
         header = response.headers.get("retry-after")
@@ -140,7 +117,7 @@ def _retry_delay_for(exc: Exception) -> float:
 
 # --- Tool definitions ---
 # Each tool is a JSON schema describing what the function does, its parameters,
-# and their types. Claude reads these to decide which tool to call and with what
+# and their types. The model reads these to decide which tool to call and with what
 # arguments.
 
 TOOLS = [
@@ -263,6 +240,12 @@ Database schema (PostgreSQL, all table/column names are double-quoted):
     },
 ]
 
+# The same tools in the OpenAI function-calling format.
+OPENAI_TOOLS = [
+    {"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
+    for t in TOOLS
+]
+
 _TOOL_PROGRESS = {
     "search_occupations": "Searching occupations…",
     "search_schools": "Looking up schools…",
@@ -283,68 +266,40 @@ TOOL_DISPATCH = {
     "run_sql": lambda args: run_sql(args["query"]),
 }
 
-SYSTEM_PROMPT = """You are a data-gathering agent for the "Next Right Step" college and career advisor app. Your job is to collect all relevant data for a user's situation by calling tools. A separate step will synthesize and present the data.
+SYSTEM_PROMPT = """You are the data-gathering agent for the "Next Right Step" college and career advisor app. Call tools to collect the data for the user's situation; a separate step writes the report.
 
-TOOLS:
-
-1. search_occupations(keyword) - Search occupations by keyword via O*NET. Returns SOC codes, bright outlook, education years, BLS salary. Use when user names a career, occupation, OR degree/field of study (e.g. "computer science" returns related occupations like Software Developers).
-2. get_tuition_medians() - National median tuition by school type (public in-state, out-of-state, private).
-3. search_schools(name, state, ownership, max_net_price, size, sort_by) - Search schools with filters. Returns graduation rate, earnings, debt, admission rate, retention rate, loan repayment. Only schools with graduation rate >= 70%.
-4. get_school_programs(school_id, program_search?) - Per-program earnings at a specific school. Requires school_id from search_schools.
-5. run_sql(query) - Read-only SQL for analytical questions the other tools can't answer.
-
-The user's intake_answers include a "path_type" field (one of: path1, path2, path3, path4, path5). Gather data based on their path:
+The user's intake_answers include a "path_type". Gather data for their path:
 
 path1 - COLLEGE VS VOCATIONAL VS WORKING NOW:
-User is undecided. Build a five-row comparison: HS diploma baseline, Cashier, Electrician, Bachelor's degree median, and user's chosen occupation.
-- search_occupations for user's chosen occupation
-- search_occupations for "electrician"
-- search_occupations for "cashier"
-- get_tuition_medians for cost baseline
-- run_sql to get average annual salary for occupations where typical_years_of_school = 4 (bachelor's degree median)
+- search_occupations for the user's chosen occupation. Code looks up the other rows (high school, cashier, electrician, bachelor's).
 
 path2 - COMPARING SCHOOLS:
-User has decided on college, wants to compare schools.
-- search_schools for each named school, OR search_schools by state if exploring by location
-- Use their compare_metrics and rank_by preferences as sort_by param
-- get_tuition_medians for national baseline
+- search_schools for each named school, or by state if exploring by location
+- Use their compare_metrics and rank_by preferences as sort_by
+- get_tuition_medians for a national baseline
 
 path3 - COMPARING PROGRAMS AT A SCHOOL:
-User is at or committed to a specific school, comparing programs.
 - search_schools for their school (to get school_id)
-- get_school_programs for their school, filtered by each program they named
-- search_occupations for occupations linked to their programs (for bright outlook, education data, BLS salary)
+- get_school_programs for that school, filtered by each program they named
+- search_occupations for occupations linked to those programs
 
-path4 - COMPARE CAREER TRACKS:
-User wants to compare 2+ career paths side by side. Check current_position, education_level, current_field, and current_role for their starting point.
-- search_occupations for EACH career they named
-- If user is working: search_occupations for their current role (for baseline comparison)
-- get_tuition_medians for cost baseline (education paths may require degrees)
+path4 - COMPARE CAREER TRACKS (starting point: current_position, education_level, current_field, current_role):
+- search_occupations for each career they named
+- If they gave a current job: search_occupations for it. If they asked to compare only these careers to each other, don't.
+- get_tuition_medians for a cost baseline
 - search_occupations for related occupations in each field
 
-path5 - PATH TO A SPECIFIC CAREER:
-User has a target occupation and needs the roadmap from current position. Check current_position, education_level, current_field, and current_role for their starting point.
-- search_occupations for target occupation
-- If user is working: search_occupations for their current role (to show gap)
-- get_tuition_medians if degree path is needed
-- search_schools by state or find relevant programs if degree required
+path5 - PATH TO A SPECIFIC CAREER (same starting point fields as path4):
+- search_occupations for the target occupation
+- If working: search_occupations for their current role
+- get_tuition_medians if a degree is needed
+- search_schools by state or relevant programs if a degree is required
 
 RULES:
+- Call all relevant tools in the first turn.
+- If search_occupations returns no results, try broader or alternative keywords.
 
-- Call ALL relevant tools for the user's path in the first turn. Gather broadly.
-- When a user mentions a degree, program, or career, call search_occupations. When they name a school, call search_schools.
-- To get program earnings, call search_schools first (for school_id), then get_school_programs.
-- If search_occupations returns no results, try broader/alternative keywords.
-- BLS caps reported salaries at $239,200/yr.
-
-RESPONSE:
-
-After gathering data, respond with 2-3 short sentences:
-1. Confirm what data you found (one sentence). Example: "I pulled salary and education data for pharmacist, electrician, and cashier, plus national tuition benchmarks."
-2. Point the user to the report: "Your personalized report is ready — take a look and let me know what stands out or what you want to dig into."
-3. If relevant, suggest a specific follow-up angle based on their situation.
-
-Do not narrate the data. Do not list numbers. Do not use markdown. A report will be generated separately from your tool results.
+When done, reply with one plain sentence saying what data you found. No numbers, no markdown.
 """
 
 
@@ -354,15 +309,96 @@ def _parse_json_response(text: str) -> dict | None:
         text = text.split("\n", 1)[1] if "\n" in text else text[3:]
     if text.endswith("```"):
         text = text[:-3]
+    text = text.strip()
     try:
-        return json.loads(text.strip())
-    except json.JSONDecodeError:
-        logger.error("Report generation returned invalid JSON: %s", text[:500])
+        # raw_decode tolerates stray text after the JSON object.
+        parsed, _ = json.JSONDecoder().raw_decode(text[text.find("{"):])
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError as exc:
+        logger.error(
+            "Report generation returned invalid JSON (%s): ...%s",
+            exc, text[max(0, exc.pos - 200):exc.pos + 200],
+        )
+        return None
+
+
+def _chosen_occupation_code(intake_answers: dict, data_blocks: list[dict]) -> str | None:
+    """The occupation the user named on path1: the one they confirmed at intake
+    (occupation_code), else the top search_occupations result with a salary."""
+    if intake_answers.get("occupation_code"):
+        return intake_answers["occupation_code"]
+    keyword = (intake_answers.get("occupation") or "").strip().lower()
+    searches = [b["data"] for b in data_blocks if b.get("type") == "search_occupations" and isinstance(b.get("data"), dict)]
+    matching = [d for d in searches if (d.get("keyword") or "").strip().lower() == keyword] or [
+        d for d in searches if (d.get("keyword") or "").strip().lower() not in ("electrician", "cashier")
+    ]
+    for data in matching:
+        for result in data.get("results", []):
+            if result.get("annual_salary"):
+                return result.get("soc_code")
+    return None
+
+
+def _is_path1(intake_answers: dict | None) -> bool:
+    return bool(intake_answers) and intake_answers.get("path_type") == "path1"
+
+
+def path1_data_blocks(intake_answers: dict) -> list[dict]:
+    """Path1 only needs the user's chosen occupation (code looks up the other
+    rows), so code gathers it without a model call."""
+    keyword = (intake_answers.get("occupation") or "").strip()
+    result = search_occupations(keyword) if keyword else {}
+    return [{"type": "search_occupations", "data": result}] if result.get("results") else []
+
+
+def _fixed_options(intake_answers: dict, data_blocks: list[dict], user_numbers: dict) -> list[dict] | None:
+    """Path1 gets the same five options as the College vs alternatives page,
+    built in code, plus a row with the user's own numbers when they gave any;
+    the LLM only writes the text around them."""
+    if not _is_path1(intake_answers):
+        return None
+    try:
+        return path1_options(_chosen_occupation_code(intake_answers, data_blocks), user_numbers)
+    except Exception:
+        logger.exception("Building path1 options failed; falling back to LLM-built options")
         return None
 
 
 def _progress(message: str, stage: str, percent: float, **extra) -> dict:
     return {"event": "progress", "message": message, "stage": stage, "percent": round(percent), **extra}
+
+
+def build_report_input(
+    intake_answers: dict, data_blocks: list[dict], agent_text: str, user_numbers: dict | None = None
+) -> tuple[dict, list[dict] | None]:
+    """Everything the report model receives, plus the code-built options (path1)
+    that code renders on its own."""
+    fixed_options = _fixed_options(intake_answers, data_blocks, user_numbers or {})
+    content = {
+        "intake_answers": intake_answers,
+        "agent_summary": agent_text,
+        "tool_results": data_blocks,
+    }
+    if user_numbers:
+        content["user_numbers"] = user_numbers
+    if fixed_options:
+        content["path1_options"] = fixed_options
+    return content, fixed_options
+
+
+async def prepare_report_input(intake_answers: dict, data_blocks: list[dict], agent_text: str) -> tuple[dict, list[dict] | None]:
+    """Pulls any numbers the user typed (path1 "specific") into structured
+    fields, then builds the report input. evals/inputs.py checks this directly."""
+    user_numbers = {}
+    if _is_path1(intake_answers) and intake_answers.get("data_source") == "specific":
+        try:
+            # Confirmed by the user at intake; extract again only if missing.
+            user_numbers = json.loads(intake_answers.get("user_numbers") or "{}")
+        except json.JSONDecodeError:
+            user_numbers = {}
+        if not user_numbers:
+            user_numbers = await extract_user_numbers(client, MODEL, intake_answers.get("specific_numbers") or "") or {}
+    return await asyncio.to_thread(build_report_input, intake_answers, data_blocks, agent_text, user_numbers)
 
 
 async def generate_report_stream(
@@ -376,48 +412,58 @@ async def generate_report_stream(
         "generate_report: %d data_blocks, intake_keys=%s",
         len(data_blocks), list(intake_answers.keys()),
     )
-    user_content = json.dumps({
-        "intake_answers": intake_answers,
-        "agent_summary": agent_text,
-        "tool_results": data_blocks,
-    }, default=_json_default)
+    content, fixed_options = await prepare_report_input(intake_answers, data_blocks, agent_text)
+    user_content = json.dumps(content, default=_json_default)
 
     yield _progress("Writing your report…", "writing", GATHERING_END)
     t0 = time.perf_counter()
     chars = 0
     last_percent = GATHERING_END
-    async with client.messages.stream(
+    parts: list[str] = []
+    usage, finish_reason = None, None
+    stream = await client.chat.completions.create(
         model=REPORT_MODEL,
         max_tokens=REPORT_SPEC_MAX_TOKENS,
-        system=REPORT_SPEC_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_content}],
-    ) as stream:
-        async for chunk in stream.text_stream:
-            chars += len(chunk)
-            # ~4 chars per token is close enough for a progress estimate.
-            fraction = min(1.0, (chars / 4) / REPORT_EXPECTED_TOKENS)
-            percent = GATHERING_END + (WRITING_END - GATHERING_END) * fraction
-            if percent - last_percent >= 3:
-                last_percent = percent
-                yield _progress("Writing your report…", "writing", percent)
-        response = await stream.get_final_message()
+        messages=[
+            {"role": "system", "content": REPORT_SPEC_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        response_format={"type": "json_object"},
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    async for chunk in stream:
+        if chunk.usage:
+            usage = chunk.usage
+        if not chunk.choices:
+            continue
+        finish_reason = chunk.choices[0].finish_reason or finish_reason
+        delta = chunk.choices[0].delta.content or ""
+        parts.append(delta)
+        chars += len(delta)
+        # ~4 chars per token is close enough for a progress estimate.
+        fraction = min(1.0, (chars / 4) / REPORT_EXPECTED_TOKENS)
+        percent = GATHERING_END + (WRITING_END - GATHERING_END) * fraction
+        if percent - last_percent >= 3:
+            last_percent = percent
+            yield _progress("Writing your report…", "writing", percent)
     elapsed = time.perf_counter() - t0
-    out_tokens = response.usage.output_tokens
+    out_tokens = usage.completion_tokens if usage else 0
     logger.info(
-        "[timing] report LLM call: %.2fs, input_tokens=%d, output_tokens=%d (%.0f tok/s), stop_reason=%s",
-        elapsed, response.usage.input_tokens, out_tokens,
-        out_tokens / elapsed if elapsed else 0, response.stop_reason,
+        "[timing] report LLM call: %.2fs, input_tokens=%d, output_tokens=%d (%.0f tok/s), finish_reason=%s",
+        elapsed, usage.prompt_tokens if usage else 0, out_tokens,
+        out_tokens / elapsed if elapsed else 0, finish_reason,
     )
 
-    text = "".join(b.text for b in response.content if b.type == "text")
-    logger.info("Report response size: %d bytes, stop_reason=%s", len(text), response.stop_reason)
+    text = "".join(parts)
+    logger.info("Report response size: %d bytes, finish_reason=%s", len(text), finish_reason)
     parsed = _parse_json_response(text)
     if parsed is None:
         yield {"event": "report", "report": {"summary": agent_text, "html": ""}}
         return
 
     yield _progress("Finalizing your report…", "rendering", RENDERING_PERCENT)
-    parsed = {"summary": parsed.get("summary", agent_text), "html": render_report(parsed)}
+    parsed = {"summary": parsed.get("summary", agent_text), "html": render_report(parsed, fixed_options)}
 
     logger.info("Report parsed OK: summary=%d chars, html=%d chars", len(parsed.get("summary", "")), len(parsed.get("html", "")))
     yield {"event": "report", "report": parsed}
@@ -436,35 +482,34 @@ async def generate_report(
     return report
 
 
-async def _call_claude(messages: list[dict]):
+async def _call_model(messages: list[dict]):
     """
-    Call the Claude API with one retry on transient errors.
+    Call the model with one retry on transient errors.
     Retriable: rate limit, connection error, 5xx. Non-retriable errors
-    (auth, bad request) surface immediately so the caller sees the real cause.
+    (auth, bad request, no credits) surface immediately so the caller sees the real cause.
     """
     last_exc: Exception | None = None
     for attempt in range(MAX_API_RETRIES + 1):
         try:
-            return await client.messages.create(
+            return await client.chat.completions.create(
                 model=MODEL,
                 max_tokens=1024,
-                system=SYSTEM_PROMPT,
-                tools=TOOLS,
-                messages=messages,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}, *messages],
+                tools=OPENAI_TOOLS,
             )
-        except (anthropic.APIConnectionError, anthropic.RateLimitError) as exc:
+        except (openai.APIConnectionError, openai.RateLimitError) as exc:
             last_exc = exc
-            logger.warning("Anthropic transient error (attempt %d): %s", attempt + 1, exc)
-        except anthropic.APIStatusError as exc:
+            logger.warning("Model API transient error (attempt %d): %s", attempt + 1, exc)
+        except openai.APIStatusError as exc:
             if exc.status_code and 500 <= exc.status_code < 600:
                 last_exc = exc
-                logger.warning("Anthropic 5xx (attempt %d): %s", attempt + 1, exc)
+                logger.warning("Model API 5xx (attempt %d): %s", attempt + 1, exc)
             else:
                 raise
         if attempt < MAX_API_RETRIES:
             await asyncio.sleep(_retry_delay_for(last_exc))
     if last_exc is None:
-        raise RuntimeError("_call_claude exited retry loop without a response or exception")
+        raise RuntimeError("_call_model exited retry loop without a response or exception")
     raise last_exc
 
 
@@ -497,15 +542,32 @@ async def run_agent_stream(
         percent = min(GATHERING_END, GATHERING_START + GATHERING_STEP * gather_steps)
         return _progress(message, "gathering", percent)
 
-    for iteration in range(MAX_TOOL_ITERATIONS):
+    text_response: str | None = None
+    agent_calls = 0
+    if not conversation_history and _is_path1(intake_answers):
+        # First path1 message: what to gather is fixed, so code does it and
+        # the agent loop below is skipped. Follow-up questions use the agent.
+        yield gathering("Searching occupations…")
+        t0 = time.perf_counter()
+        data_blocks = await asyncio.to_thread(path1_data_blocks, intake_answers)
+        tools_total += time.perf_counter() - t0
+        text_response = (
+            f"I pulled salary, education, and debt data for {intake_answers.get('occupation')}, plus cashiers, "
+            "electricians, and national high school and bachelor's degree medians"
+            + (", and used the numbers you shared." if intake_answers.get("data_source") == "specific" else ".")
+        )
+        messages.append({"role": "assistant", "content": text_response})
+
+    for iteration in range(MAX_TOOL_ITERATIONS if text_response is None else 0):
+        agent_calls = iteration + 1
         try:
             yield gathering("Understanding your question…" if iteration == 0 else "Reviewing what I found…")
             t0 = time.perf_counter()
-            response = await _call_claude(messages)
+            response = await _call_model(messages)
             llm_total += time.perf_counter() - t0
             gather_steps += 1
-        except anthropic.APIError as exc:
-            logger.error("Anthropic API failed after retries: %s", exc)
+        except openai.APIError as exc:
+            logger.error("Model API failed after retries: %s", exc)
             yield {
                 "event": "complete",
                 "response": "Sorry, I'm having trouble right now. Please try again in a moment.",
@@ -514,110 +576,90 @@ async def run_agent_stream(
             }
             return
 
-        if response.stop_reason == "tool_use":
-            messages.append({"role": "assistant", "content": [b.model_dump() for b in response.content]})
+        message = response.choices[0].message
+        if message.tool_calls:
+            # Keep the message exactly as returned: providers attach fields that
+            # must be sent back with tool calls (Gemini's thought signatures,
+            # other providers' reasoning fields), and rebuilding it drops them.
+            messages.append(message.model_dump(exclude_none=True))
 
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    tool_name = block.name
-                    tool_input = block.input
-                    tool_id = block.id
+            for call in message.tool_calls:
+                tool_name = call.function.name
+                tool_id = call.id
 
-                    progress_message = _TOOL_PROGRESS.get(tool_name, f"Running {tool_name}…")
+                progress_message = _TOOL_PROGRESS.get(tool_name, f"Running {tool_name}…")
+                yield gathering(progress_message)
+
+                func = TOOL_DISPATCH.get(tool_name)
+                if not func:
+                    messages.append({"role": "tool", "tool_call_id": tool_id, "content": f"Error: unknown tool '{tool_name}'"})
+                    continue
+
+                try:
+                    tool_input = json.loads(call.function.arguments or "{}")
+                    t0 = time.perf_counter()
+                    result = await asyncio.to_thread(func, tool_input)
+                    tools_total += time.perf_counter() - t0
+                    messages.append({"role": "tool", "tool_call_id": tool_id, "content": json.dumps(result, default=_json_default)})
+                    if not (isinstance(result, dict) and "error" in result):
+                        data_blocks.append({"type": tool_name, "data": result})
+                    gather_steps += 1
+                    # Same message, bar advances.
                     yield gathering(progress_message)
-
-                    func = TOOL_DISPATCH.get(tool_name)
-                    if not func:
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "content": f"Error: unknown tool '{tool_name}'",
-                                "is_error": True,
-                            }
-                        )
-                        continue
-
-                    try:
-                        t0 = time.perf_counter()
-                        result = await asyncio.to_thread(func, tool_input)
-                        tools_total += time.perf_counter() - t0
-                        result_json = json.dumps(result, default=_json_default)
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "content": result_json,
-                            }
-                        )
-                        if not (isinstance(result, dict) and "error" in result):
-                            data_blocks.append({"type": tool_name, "data": result})
-                        gather_steps += 1
-                        # Same message, bar advances.
-                        yield gathering(progress_message)
-                    except Exception as exc:
-                        logger.exception("Tool %s failed", tool_name)
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_id,
-                                "content": f"Error executing {tool_name}: {exc}",
-                                "is_error": True,
-                            }
-                        )
-
-            messages.append({"role": "user", "content": tool_results})
+                except Exception as exc:
+                    logger.exception("Tool %s failed", tool_name)
+                    messages.append({"role": "tool", "tool_call_id": tool_id, "content": f"Error executing {tool_name}: {exc}"})
 
         else:
-            text_response = "".join(
-                block.text for block in response.content if block.type == "text"
-            )
-            messages.append({"role": "assistant", "content": [b.model_dump() for b in response.content]})
+            text_response = message.content or ""
+            messages.append(message.model_dump(exclude_none=True))
+            break
 
-            report_html = ""
-            report_status = "skipped"
-            logger.info("Agent done. data_blocks=%d, intake_answers=%s", len(data_blocks), bool(intake_answers))
-            if data_blocks and intake_answers:
-                report_status = "failed"
-                try:
-                    t0 = time.perf_counter()
-                    report = {}
-                    async for event in generate_report_stream(intake_answers, data_blocks, text_response):
-                        if event["event"] == "report":
-                            report = event["report"]
-                        else:
-                            yield event
-                    report_total = time.perf_counter() - t0
-                    text_response = report.get("summary", text_response)
-                    report_html = report.get("html", "")
-                    if report_html:
-                        report_status = "success"
-                        logger.info("Report OK: %d bytes HTML", len(report_html))
-                    else:
-                        logger.warning("Report returned empty HTML")
-                except Exception as exc:
-                    logger.exception("Report generation failed: %s", exc)
+    if text_response is None:
+        logger.warning("Agent hit MAX_TOOL_ITERATIONS=%d without finishing", MAX_TOOL_ITERATIONS)
+        yield {
+            "event": "complete",
+            "response": "I got stuck working through that. Try rephrasing your question or asking something simpler.",
+            "report_html": "",
+            "conversation_history": messages,
+        }
+        return
+
+    report_html = ""
+    report_status = "skipped"
+    logger.info("Agent done. data_blocks=%d, intake_answers=%s", len(data_blocks), bool(intake_answers))
+    if data_blocks and intake_answers:
+        report_status = "failed"
+        try:
+            t0 = time.perf_counter()
+            report = {}
+            async for event in generate_report_stream(intake_answers, data_blocks, text_response):
+                if event["event"] == "report":
+                    report = event["report"]
+                else:
+                    yield event
+            report_total = time.perf_counter() - t0
+            text_response = report.get("summary", text_response)
+            report_html = report.get("html", "")
+            if report_html:
+                report_status = "success"
+                logger.info("Report OK: %d bytes HTML", len(report_html))
             else:
-                logger.info("Skipping report: data_blocks=%d, intake_answers=%s", len(data_blocks), intake_answers is not None)
+                logger.warning("Report returned empty HTML")
+        except Exception as exc:
+            logger.exception("Report generation failed: %s", exc)
+    else:
+        logger.info("Skipping report: data_blocks=%d, intake_answers=%s", len(data_blocks), intake_answers is not None)
 
-            logger.info(
-                "[timing] run total: %.2fs (agent LLM: %.2fs over %d calls, tools: %.2fs, report: %.2fs)",
-                time.perf_counter() - run_start, llm_total, iteration + 1, tools_total, report_total,
-            )
-            yield {
-                "event": "complete",
-                "response": text_response,
-                "report_html": report_html,
-                "report_status": report_status,
-                "conversation_history": messages,
-            }
-            return
-
-    logger.warning("Agent hit MAX_TOOL_ITERATIONS=%d without finishing", MAX_TOOL_ITERATIONS)
+    logger.info(
+        "[timing] run total: %.2fs (agent LLM: %.2fs over %d calls, tools: %.2fs, report: %.2fs)",
+        time.perf_counter() - run_start, llm_total, agent_calls, tools_total, report_total,
+    )
     yield {
         "event": "complete",
-        "response": "I got stuck working through that. Try rephrasing your question or asking something simpler.",
-        "report_html": "",
+        "response": text_response,
+        "report_html": report_html,
+        "report_status": report_status,
         "conversation_history": messages,
     }
+

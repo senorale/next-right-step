@@ -1,6 +1,6 @@
 fastapi==0.115.12
 uvicorn==0.34.3
-anthropic==0.52.0
+openai==3.24.0
 psycopg2-binary==2.9.10
 sqlalchemy==2.0.41
 python-dotenv==1.1.0
