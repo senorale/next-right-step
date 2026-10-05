@@ -25,7 +25,7 @@ Thank you, Mike, for the idea that started it and collaboration/ideation along t
 
 Two ways in, from the landing page:
 
-- **Guided experience** (`/chat`): an AI counselor (Claude) asks about your situation, pulls the relevant data, and builds a personalized report.
+- **Guided experience** (`/chat`): an AI counselor asks about your situation, pulls the relevant data, and builds a personalized report you can rate with a thumbs up or down.
 - **Explore on your own** (`/explore`): five self-serve paths.
   - **College vs alternatives**: a bachelor's degree against trades and working right away, plus any career you add.
   - **Compare schools**: net price for your family income, graduation rate, debt, earnings, and payoff for up to 5 schools.
@@ -65,15 +65,24 @@ payoff     = total cost / (new salary - starting salary)
 
 Constants live in `src/app/constants/college_related_constants.ts`, and the shared math in `src/app/components/paths/finance.ts` and `src/lib/career-cost.ts`.
 
+## How the guided experience works
+
+The counselor API (`api/`) runs two model calls per report:
+
+1. **Gathering data** (`agent.py`): based on the intake answers (`path_type` plus the user's starting point), the model calls tools that read the database (occupations and BLS salaries, schools, programs, tuition medians) and O*NET, then writes a short chat reply.
+2. **Writing the report** (`report.py`): the model turns the gathered data into a compact JSON spec (headline, options, sections, limitations). Python does the financial math and renders the HTML and charts from fixed templates, so the model's output stays small and fast.
+
+Every report opens with a notice that its figures are medians or averages, not a prediction for the reader. Model calls go to Gemini 3.5 Flash-Lite through Google's OpenAI-compatible endpoint (`api/llm.py`). Production (`APP_ENV=production` on the Railway deployment) uses the paid `GEMINI_API_KEY`; local development and evals use the free-tier `GEMINI_FREE_TIER_API_KEY`, so test with made-up input only. The `LLM_*` env vars can point at any other OpenAI-compatible provider.
+
 ## Tech stack
 
 - **Frontend:** Next.js 16 (App Router, Turbopack), React 19, Tailwind, shadcn/ui, Recharts 3
 - **Database:** PostgreSQL with Prisma 6
-- **Counselor API** (`api/`): Python 3.13, FastAPI, Anthropic SDK
+- **Counselor API** (`api/`): Python 3.13, FastAPI, OpenAI SDK pointed at Gemini's OpenAI-compatible endpoint
 
 ## Getting started
 
-Prereqs: Node 20+, Python 3.13, PostgreSQL, and API keys for College Scorecard ([api.data.gov](https://api.data.gov/signup/)), O*NET, and Anthropic.
+Prereqs: Node 20+, Python 3.13, PostgreSQL, and API keys for College Scorecard ([api.data.gov](https://api.data.gov/signup/)), O*NET, and a free-tier [Gemini API key](https://aistudio.google.com/apikey) for local development (production uses a separate paid key).
 
 1. Install:
    ```bash
@@ -86,10 +95,11 @@ Prereqs: Node 20+, Python 3.13, PostgreSQL, and API keys for College Scorecard (
    ```bash
    npx prisma migrate deploy
    ```
-4. Seed the database. The Field of Study CSV is large and gitignored; download `Most-Recent-Cohorts-Field-of-Study.csv` from [College Scorecard](https://collegescorecard.ed.gov/data/) into `data/` first.
+4. Seed the database. The College Scorecard CSVs are large and gitignored; download `Most-Recent-Cohorts-Field-of-Study.csv` and `Most-Recent-Cohorts-Institution.csv` from [College Scorecard](https://collegescorecard.ed.gov/data/) into `data/` first.
    ```bash
    npm run create-db     # occupations and BLS salaries
    npm run seed-schools  # bachelor's-degree schools from the Scorecard API
+   npm run seed-tuition  # national tuition medians (needs Most-Recent-Cohorts-Institution.csv in data/)
    TS_NODE_COMPILER_OPTIONS='{"module":"CommonJS","moduleResolution":"node"}' \
      node --env-file=.env -r ts-node/register/transpile-only scripts/seed-cip-soc-crosswalk.ts
    TS_NODE_COMPILER_OPTIONS='{"module":"CommonJS","moduleResolution":"node"}' \
