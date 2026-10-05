@@ -104,6 +104,7 @@ Prereqs: Node 20+, Python 3.13, PostgreSQL, and API keys for College Scorecard (
      node --env-file=.env -r ts-node/register/transpile-only scripts/seed-cip-soc-crosswalk.ts
    TS_NODE_COMPILER_OPTIONS='{"module":"CommonJS","moduleResolution":"node"}' \
      node --env-file=.env -r ts-node/register/transpile-only scripts/seed-program-debt.ts
+   psql "$DATABASE_URL" -f scripts/occupation-years-fixes.sql  # known corrections to years of school
    ```
 5. Set up the counselor API's Python environment (Python 3.13, one time):
    ```bash

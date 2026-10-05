@@ -205,7 +205,7 @@ def path1_options(occupation_code: str | None, user_numbers: dict | None = None)
         cost = career_cost(code)
         if cost:
             options.append(_career_option(cost))
-    options.append({
+    bachelors = {
         "name": "Bachelor's degree (median)",
         "short_label": "Bachelor's",
         "education": "Bachelor's degree",
@@ -214,16 +214,25 @@ def path1_options(occupation_code: str | None, user_numbers: dict | None = None)
         "cost_basis": "National median bachelor's debt across all degree fields",
         "expected_salary": BACHELOR_SALARY,
         "salary_basis": "BLS median weekly earnings x 52",
-    })
+    }
+    options.append(bachelors)
     chosen = career_cost(occupation_code) if occupation_code else None
     if chosen:
         option = _career_option(chosen)
-        # Stated outright so the report doesn't have to work it out.
+        mine = _user_option(option, user_numbers or {}, bachelors["debt"])
+        # Stated outright so the report never computes a number itself.
         option["graduate_school_required"] = chosen["years_in_school"] > BACHELOR_YEARS
         option["years_beyond_bachelors"] = max(chosen["years_in_school"] - BACHELOR_YEARS, 0)
-        mine = _user_option(option, user_numbers or {}, options[3]["debt"])
+        option["salary_gap_vs_bachelors"] = round(option["expected_salary"] - bachelors["expected_salary"])
+        if option["debt"] is not None:
+            option["debt_gap_vs_bachelors"] = round(option["debt"] - bachelors["debt"])
         if mine:
             option["name"] = f"{option['name']} (national median)"
+            mine["graduate_school_required"] = option["graduate_school_required"]
+            mine["years_beyond_bachelors"] = option["years_beyond_bachelors"]
+            mine["salary_gap_vs_median"] = round(mine["expected_salary"] - option["expected_salary"])
+            if option["debt"] is not None:
+                mine["debt_gap_vs_median"] = round(mine["debt"] - option["debt"])
         options.append(option)
         if mine:
             options.append(mine)
