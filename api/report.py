@@ -78,6 +78,50 @@ path5 (path to career): options are the realistic routes to the target. One sect
 """
 
 
+# Shape the path1 report model must return; the API enforces it (structured output).
+_TEXT = {"type": "string"}
+PATH1_REPORT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": _TEXT,
+        "sections": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"title": _TEXT, "bullets": {"type": "array", "items": _TEXT}, "what_it_means": _TEXT},
+            "required": ["title", "bullets", "what_it_means"],
+            "additionalProperties": False,
+        }},
+        "limitations": {"type": "array", "items": _TEXT},
+    },
+    "required": ["headline", "sections", "limitations"],
+    "additionalProperties": False,
+}
+
+# Path1 only (college vs trade vs working now). The prompt above still serves
+# paths 2-5; each path gets its own prompt as it's reworked, and shared rules
+# get pulled out once every path's evals pass.
+PATH1_REPORT_PROMPT = """You write the text of a report for someone deciding between college, a trade, or working right away. Code has already built the five options in path1_options (years of school, median student debt, median salary; rows marked user_numbers use the user's own tuition or salary) and renders the salary chart, the financial breakdown with payoff timelines, and notes on sources and assumptions. Your text explains what those numbers mean; the reader sees the chart and table next to it.
+
+Return only JSON:
+{"headline": "...", "sections": [{"title": "...", "bullets": ["..."], "what_it_means": "..."}], "limitations": ["..."]}
+
+- headline: 1-2 sentences, also shown as the chat reply, so it must stand on its own. State the main takeaway itself; never describe the report or the comparison ("This report...", "Comparing...").
+  * a user_numbers row exists: lead with the user's expected salary and total cost against the national median, using its gaps. E.g. "With your numbers, becoming a teacher means $60,000 in total cost, $35,000 more than the national median debt, for an expected salary of $50,000, $12,000 below the national median."
+  * otherwise, graduate_school_required true: lead with years_beyond_bachelors as years beyond a bachelor's and the total years of school, then what those years buy (median salary) and cost (median debt). E.g. "Becoming a school counselor typically takes 2 years beyond a bachelor's (6 in total) and $30,000 more in median debt, for $8,000 more in median salary."
+  * otherwise, graduate_school_required false: say no graduate school is required, then the years of school, median salary, and median debt. E.g. "Teachers need no graduate school: typically 4 years of school and about $25,000 in median debt for a median salary of about $62,000."
+- sections: two. (1) Pay and years of school. (2) Cost: median debt and years out of work. The reader already sees every row in the table, so bullets compare options instead of restating them, using the supplied gaps, e.g. "School counselors earn $8,000 more in median salary than bachelor's holders, but typically need 2 more years of school and $30,000 more in median debt." what_it_means: one concrete takeaway for this person.
+- limitations: 1-2 caveats specific to this comparison. The report already says figures are medians and how payoff is counted; don't repeat that.
+
+Rules:
+- Use only numbers from path1_options; never compute one. For differences use the supplied gaps: salary_gap_vs_bachelors and debt_gap_vs_bachelors on the chosen occupation, salary_gap_vs_median and debt_gap_vs_median on a user_numbers row (negative means less). Use each figure once.
+- Each row's debt is its total. A graduate row's debt already includes a bachelor's; its extra debt is debt_gap_vs_bachelors.
+- Put "median" with every national salary or debt figure. The user's own figures (rows marked user_numbers, and their gaps) say "your" instead, never "median". National figures describe occupations, never the user's own pay.
+- Write dollar amounts with commas and no decimals ($61,690).
+- Years of school are typical, not guaranteed: say "typically" (e.g. "typically 6 years of school").
+- The payoff timeline already counts debt, loan interest, and earnings given up while in school; don't describe what it includes or leaves out.
+- For user_numbers rows, say which figures are the user's and compare them with the national median row. When there is one, the headline leads with that comparison (e.g. their expected salary and total cost against the national median).
+- Say "degree" or "program", never "major"; "payoff timeline", never "break-even".
+"""
+
 def _esc(value) -> str:
     return html.escape(str(value), quote=True)
 

@@ -31,7 +31,7 @@ from db import (
 )
 from career_cost import path1_options
 from user_numbers import extract_user_numbers
-from report import REPORT_SPEC_SYSTEM_PROMPT, render_report
+from report import PATH1_REPORT_PROMPT, PATH1_REPORT_SCHEMA, REPORT_SPEC_SYSTEM_PROMPT, render_report
 
 logger = logging.getLogger(__name__)
 
@@ -413,6 +413,25 @@ async def generate_report_stream(
         len(data_blocks), list(intake_answers.keys()),
     )
     content, fixed_options = await prepare_report_input(intake_answers, data_blocks, agent_text)
+    async for event in write_report(content, fixed_options, agent_text):
+        yield event
+
+
+def _report_prompt(content: dict, fixed_options: list[dict] | None) -> tuple[str, dict]:
+    """System prompt and request settings. Path1 with code-built options has its own
+    prompt, an enforced schema, and temperature 0 (its numbers come from code, so
+    variety only adds risk, e.g. garbled figures); other paths share the original prompt."""
+    if fixed_options and (content.get("intake_answers") or {}).get("path_type") == "path1":
+        return PATH1_REPORT_PROMPT, {
+            "response_format": {"type": "json_schema", "json_schema": {"name": "path1_report", "schema": PATH1_REPORT_SCHEMA}},
+            "temperature": 0,
+        }
+    return REPORT_SPEC_SYSTEM_PROMPT, {"response_format": {"type": "json_object"}}
+
+
+async def write_report(content: dict, fixed_options: list[dict] | None, agent_text: str):
+    """Report generation alone: writes and renders the report from a prepared
+    input (prepare_report_input). evals/report_eval.py calls this with fixed inputs."""
     user_content = json.dumps(content, default=_json_default)
 
     yield _progress("Writing your report…", "writing", GATHERING_END)
@@ -421,14 +440,15 @@ async def generate_report_stream(
     last_percent = GATHERING_END
     parts: list[str] = []
     usage, finish_reason = None, None
+    system_prompt, settings = _report_prompt(content, fixed_options)
     stream = await client.chat.completions.create(
         model=REPORT_MODEL,
         max_tokens=REPORT_SPEC_MAX_TOKENS,
         messages=[
-            {"role": "system", "content": REPORT_SPEC_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
-        response_format={"type": "json_object"},
+        **settings,
         stream=True,
         stream_options={"include_usage": True},
     )
@@ -463,7 +483,9 @@ async def generate_report_stream(
         return
 
     yield _progress("Finalizing your report…", "rendering", RENDERING_PERCENT)
-    parsed = {"summary": parsed.get("summary", agent_text), "html": render_report(parsed, fixed_options)}
+    # The chat reply: the report's summary, or its headline when there is none (path1).
+    reply = parsed.get("summary") or parsed.get("headline") or agent_text
+    parsed = {"summary": reply, "html": render_report(parsed, fixed_options)}
 
     logger.info("Report parsed OK: summary=%d chars, html=%d chars", len(parsed.get("summary", "")), len(parsed.get("html", "")))
     yield {"event": "report", "report": parsed}
