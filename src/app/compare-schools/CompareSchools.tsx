@@ -9,7 +9,7 @@ import SchoolSearch from '../components/paths/SchoolSearch'
 import SelectedPills from '../components/paths/SelectedPills'
 import ComparisonTable, { bestIndex, type ComparisonRow } from '../components/paths/ComparisonTable'
 import BarChartComparison from '../components/paths/BarChartComparison'
-import { computeFinancials, HS_SALARY, LOAN_RATE, REPAYMENT_YEARS } from '../components/paths/finance'
+import { computeFinancials, HS_SALARY, LOAN_RATE, PAYOFF_EXPLAINER, REPAYMENT_YEARS } from '../components/paths/finance'
 import { calculateMonthlyPayment } from '@/app/utils'
 import { colorAt, money, moneyOrNA, pctOrNA, ratio, schoolYears, years } from '../components/paths/format'
 import type { School } from '../components/paths/types'
@@ -226,7 +226,7 @@ export default function CompareSchools() {
                   },
                   {
                     label: 'Payoff timeline',
-                    info: `Total cost divided by the yearly earnings gain over a high school diploma (${money(HS_SALARY)}).`,
+                    info: `${PAYOFF_EXPLAINER} Compared with a high school diploma (${money(HS_SALARY)}).`,
                     values: rows.map((r) =>
                       !r.financials
                         ? 'n/a'
@@ -267,7 +267,7 @@ export default function CompareSchools() {
                 format={money}
               />
               <BarChartComparison
-                title="Payoff timeline (years)"
+                title="Payoff timeline (years from starting school)"
                 data={rows.map((r, i) => ({
                   name: r.s.name,
                   value: r.payoffYears,

@@ -166,11 +166,16 @@ const faqs: { q: string; a: ReactNode }[] = [
           <li>
             Loan interest on that debt at {C.STUDENT_LOAN_INTEREST_RATE}% over {C.TYPICAL_REPAYMENT_YEARS} years
           </li>
-          <li>Wages you give up while in school: your starting salary times the years of school</li>
+          <li>
+            Wages you give up while in school: your starting salary times the years of school. We assume you study
+            full time and earn nothing in the meantime.
+          </li>
         </ul>
         <p>
-          Then we divide the total by how much more you&apos;d earn each year than your starting salary. The result
-          is the number of years of work it takes for the higher salary to pay back the investment.{' '}
+          Then we divide the total by how much more you&apos;d earn each year than your starting salary, and add
+          the years of school. The result counts from your first day of school until the higher salary has paid back
+          the investment. It assumes you earn the median salary right after graduating; starting pay is often lower,
+          so the real payoff usually takes longer.{' '}
           <Strong>Does not pay off</Strong> means the new salary isn&apos;t higher than where you start.{' '}
           <Strong>Nothing to pay off</Strong> means no school is needed.
         </p>

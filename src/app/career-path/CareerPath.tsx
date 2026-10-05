@@ -234,7 +234,7 @@ export default function CareerPath() {
               </ol>
 
               {financials && (
-                <PayoffSummary financials={financials} payoffLabel="Time to recoup" baselineLabel={incomeLabel} />
+                <PayoffSummary financials={financials} payoffLabel="Time to recoup (from starting school)" baselineLabel={incomeLabel} />
               )}
             </CardContent>
           </Card>

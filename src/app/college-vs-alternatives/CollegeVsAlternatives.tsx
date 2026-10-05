@@ -9,7 +9,7 @@ import OccupationSearch from '../components/paths/OccupationSearch'
 import SelectedPills from '../components/paths/SelectedPills'
 import ComparisonTable, { bestIndex } from '../components/paths/ComparisonTable'
 import BarChartComparison from '../components/paths/BarChartComparison'
-import { computeFinancials, HS_SALARY, LOAN_RATE, REPAYMENT_YEARS, type Financials } from '../components/paths/finance'
+import { computeFinancials, HS_SALARY, LOAN_RATE, PAYOFF_EXPLAINER, REPAYMENT_YEARS, type Financials } from '../components/paths/finance'
 import { colorAt, money, moneyOrNA, schoolYears, years } from '../components/paths/format'
 import type { CareerCost, Occupation } from '../components/paths/types'
 
@@ -136,8 +136,10 @@ export default function CollegeVsAlternatives() {
               {bachelorsPayoff != null && (
                 <>
                   {' '}
-                  After debt, interest, and wages given up while in school, the degree pays for itself in about{' '}
-                  <span className="whitespace-nowrap font-medium text-foreground">{years(bachelorsPayoff)}</span>.
+                  After debt, interest, and wages given up while in school, the degree pays for itself about{' '}
+                  <span className="whitespace-nowrap font-medium text-foreground">{years(bachelorsPayoff)}</span>{' '}
+                  after the first day of school, assuming full-time study with no income in the meantime and median
+                  pay right after graduating.
                 </>
               )}
             </p>
@@ -217,7 +219,7 @@ export default function CollegeVsAlternatives() {
                   },
                   {
                     label: 'Payoff timeline',
-                    info: 'Years of work until the salary gain over a high school diploma recovers the total investment.',
+                    info: `${PAYOFF_EXPLAINER} Compared with a high school diploma.`,
                     values: options.map((o, i) =>
                       o.yearsInSchool === 0
                         ? 'Nothing to pay off'

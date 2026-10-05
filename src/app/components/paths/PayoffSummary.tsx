@@ -1,6 +1,6 @@
 import { InfoTooltip } from '../calculator/InfoTooltip'
 import type { Financials } from './finance'
-import { LOAN_RATE, REPAYMENT_YEARS } from './finance'
+import { LOAN_RATE, PAYOFF_EXPLAINER, REPAYMENT_YEARS } from './finance'
 import { money, years } from './format'
 
 function Stat({ label, value, info }: { label: string; value: string; info?: string }) {
@@ -42,7 +42,7 @@ export default function PayoffSummary({
       <Stat
         label={payoffLabel}
         value={f.payoffYears === null ? 'Does not pay off' : years(f.payoffYears)}
-        info={`Total cost divided by the yearly salary gain over ${baselineLabel}.`}
+        info={`${PAYOFF_EXPLAINER} Compared with ${baselineLabel}.`}
       />
     </div>
   )

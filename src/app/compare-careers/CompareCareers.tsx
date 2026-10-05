@@ -9,7 +9,7 @@ import SelectedPills from '../components/paths/SelectedPills'
 import ComparisonTable, { bestIndex } from '../components/paths/ComparisonTable'
 import BarChartComparison from '../components/paths/BarChartComparison'
 import BaselinePicker, { baselineLabel, baselineSalary, type Baseline } from '../components/paths/BaselinePicker'
-import { computeFinancials, LOAN_RATE, REPAYMENT_YEARS } from '../components/paths/finance'
+import { computeFinancials, LOAN_RATE, PAYOFF_EXPLAINER, REPAYMENT_YEARS } from '../components/paths/finance'
 import { colorAt, money, moneyOrNA, schoolYears, years } from '../components/paths/format'
 import type { CareerCost, Occupation } from '../components/paths/types'
 
@@ -138,7 +138,7 @@ export default function CompareCareers() {
                   },
                   {
                     label: 'Payoff timeline',
-                    info: `Total cost divided by the yearly salary gain over ${baseName}.`,
+                    info: `${PAYOFF_EXPLAINER} Compared with ${baseName}.`,
                     values: rows.map((r) =>
                       !r.financials
                         ? 'n/a'
@@ -179,7 +179,7 @@ export default function CompareCareers() {
                 format={money}
               />
               <BarChartComparison
-                title="Payoff timeline (years)"
+                title="Payoff timeline (years from starting school)"
                 data={rows.map((r, i) => ({
                   name: r.c.occupation.name,
                   value: r.financials && r.financials.totalCost > 0 ? r.financials.payoffYears : null,
