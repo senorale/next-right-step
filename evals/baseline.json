@@ -1,0 +1,23 @@
+{
+  "runs": 3,
+  "prompt_chars": {
+    "agent_system": 1879,
+    "agent_tools": 5480,
+    "report_system": 4570
+  },
+  "pass_rate": {
+    "report_rendered": 1.0,
+    "notice_at_top": 1.0,
+    "no_user_as_earner": 1.0,
+    "dollar_figures_labeled": 1.0,
+    "charts_have_source": 1.0,
+    "no_starting_pay": 1.0,
+    "no_banned_words": 1.0,
+    "no_payoff_guesses": 1.0,
+    "no_average_salary": 1.0,
+    "prose_figures_in_report": 1.0,
+    "no_template_leaks": 1.0
+  },
+  "all_pass_rate": 1.0,
+  "avg_seconds": 3.2
+}

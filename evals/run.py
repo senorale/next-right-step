@@ -1,230 +1,188 @@
 """
-Eval runner — loops dataset, runs each message through the agent, scores results.
-Always compares against baseline when one exists.
+Report output eval. Runs each case in cases.jsonl through the full agent
+(data gathering + report), scores the output with checks.py, and compares to
+baseline.json.
 
-Usage:
-    python -m evals.run                       # run all, diff against baseline
-    python -m evals.run --id happy-cs         # run one row
-    python -m evals.run --filter happy        # run rows tagged "happy"
-    python -m evals.run --save-baseline       # run all + save as new baseline
+Runs on Gemini's free tier (GEMINI_FREE_TIER_API_KEY in .env) so evals cost nothing.
+Free-tier prompts may be used by Google and read by reviewers, so cases must
+be made up, never real user data. Free-tier speed differs from paid, so the
+timings are rough; use them for comparisons between runs, not as user latency.
+
+    api/venv/bin/python evals/run.py               # 3 runs per case, compare to baseline
+    api/venv/bin/python evals/run.py --repeats 5
+    api/venv/bin/python evals/run.py --case path1-lawyer --repeats 1
+    api/venv/bin/python evals/run.py --save-baseline
+    api/venv/bin/python evals/run.py --api-dir <path>/api --repeats 1   # benchmark another commit
+    api/venv/bin/python evals/run.py --rescore evals/results/<file>.json   # re-check saved outputs, no API calls
+
+Full outputs go to evals/results/ (gitignored).
 """
 
 import argparse
 import asyncio
 import json
+import logging
+import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "api"))
-sys.path.insert(0, str(PROJECT_ROOT))
+EVALS = Path(__file__).resolve().parent
+# --api-dir runs another copy of the API (e.g. a git worktree of an older commit).
+API = Path(sys.argv[sys.argv.index("--api-dir") + 1]).resolve() if "--api-dir" in sys.argv else EVALS.parent / "api"
+sys.path.insert(0, str(API))
+sys.path.insert(0, str(EVALS))
+CALLER_CWD = Path.cwd()
+os.chdir(API)  # agent.py loads ../.env relative to the working directory
 
-from agent import run_agent
-from evals.scorers import score
-from evals.judges import run_all_judges
-from evals.db_wait import wait_for_db
+from dotenv import load_dotenv  # noqa: E402
 
+load_dotenv("../.env")
+if not os.environ.get("GEMINI_FREE_TIER_API_KEY") and "--rescore" not in sys.argv:
+    sys.exit("Set GEMINI_FREE_TIER_API_KEY in .env (a free-tier key from Google AI Studio).")
+# Local runs always use the free-tier key (api/llm.py); never run evals inside a Railway deployment.
 
-DATASET_PATH = Path(__file__).resolve().parent / "dataset.jsonl"
-
-
-def load_dataset(filter_id: str | None = None, filter_tag: str | None = None) -> list[dict]:
-    rows = []
-    with open(DATASET_PATH) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            row = json.loads(line)
-            if filter_id and row["id"] != filter_id:
-                continue
-            if filter_tag and filter_tag not in row.get("tags", []):
-                continue
-            rows.append(row)
-    return rows
+logging.basicConfig(level=logging.INFO, format="    %(message)s")
 
 
-BASELINE_PATH = Path(__file__).resolve().parent / "baseline.jsonl"
+class _WarningCollector(logging.Handler):
+    """Keeps WARNING and above per run so failures can be diagnosed from results."""
+
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.lines: list[str] = []
+
+    def emit(self, record):
+        self.lines.append(f"{record.levelname}: {record.getMessage()[:500]}")
 
 
-def load_results_file(path: Path) -> dict[str, dict] | None:
-    """Load a results JSONL file, keyed by row id."""
-    if not path.exists():
-        return None
-    by_id = {}
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            row = json.loads(line)
-            by_id[row["id"]] = row
-    return by_id
+WARNINGS = _WarningCollector()
+logging.getLogger().addHandler(WARNINGS)
+for noisy in ("httpx", "anthropic", "db"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
+
+import agent  # noqa: E402
+import report  # noqa: E402
+from checks import run_checks  # noqa: E402
+
+BASELINE = EVALS / "baseline.json"
+RESULTS = EVALS / "results"
+FAILED_REPLY = "Sorry, I'm having trouble right now."
 
 
-def save_baseline(results: list[dict]):
-    """Save current results as the baseline."""
-    BASELINE_PATH.parent.mkdir(exist_ok=True)
-    with open(BASELINE_PATH, "w") as f:
-        for r in results:
-            f.write(json.dumps(r) + "\n")
-    print(f"\n  Baseline saved to {BASELINE_PATH}")
+def load_cases() -> list[dict]:
+    return [json.loads(line) for line in (EVALS / "cases.jsonl").read_text().splitlines() if line.strip()]
 
 
-def print_diff(current: list[dict], previous: dict[str, dict]):
-    """Show regressions and improvements vs baseline."""
-    print("\n--- Diff vs Baseline ---")
-    regressions = 0
-    improvements = 0
-
-    for result in current:
-        row_id = result["id"]
-        prev = previous.get(row_id)
-        if not prev:
-            print(f"  {row_id}: NEW (not in baseline)")
-            continue
-
-        for scorer, passed in result["scores"].items():
-            prev_passed = prev.get("scores", {}).get(scorer)
-            if prev_passed is None:
-                continue
-            if passed and not prev_passed:
-                print(f"  {row_id}: {scorer} FIXED")
-                improvements += 1
-            elif not passed and prev_passed:
-                print(f"  {row_id}: {scorer} REGRESSED")
-                regressions += 1
-
-        for judge_name, judge in result.get("judges", {}).items():
-            prev_judge = prev.get("judges", {}).get(judge_name, {})
-            prev_score = prev_judge.get("score", 0)
-            curr_score = judge.get("score", 0)
-            delta = curr_score - prev_score
-            if delta != 0:
-                direction = "+" if delta > 0 else ""
-                label = "UP" if delta > 0 else "DOWN"
-                print(f"  {row_id}: {judge_name} {prev_score} -> {curr_score} ({direction}{delta}) {label}")
-                if delta > 0:
-                    improvements += 1
-                else:
-                    regressions += 1
-
-    print(f"\n  {improvements} improvement(s), {regressions} regression(s)")
-
-
-async def run_one(row: dict) -> dict:
-    start = time.time()
-    result = await run_agent(row["user_message"])
-    elapsed = time.time() - start
-
-    scores = score(
-        response=result["response"],
-        conversation_history=result["conversation_history"],
-        expected=row,
-    )
-
-    judge_results = await run_all_judges(
-        user_message=row["user_message"],
-        response=result["response"],
-        conversation_history=result["conversation_history"],
-    )
-
+async def run_case(case: dict) -> dict:
+    final = {}
+    WARNINGS.lines = []
+    for attempt in range(2):
+        start = time.perf_counter()
+        async for event in agent.run_agent_stream(case["message"], [], case["intake_answers"]):
+            if event.get("event") == "complete":
+                final = event
+        if not final.get("response", "").startswith(FAILED_REPLY):
+            break
+        # Runs go back to back. The agent already retries a rate-limited call once
+        # after the delay the API asks for; if the run still fails (error logged
+        # above), give the free-tier quota time to reset and retry the run once.
+        print("  model API failed, retrying in 30s…", flush=True)
+        await asyncio.sleep(30)
+    response, report_html = final.get("response", ""), final.get("report_html", "")
     return {
-        "id": row["id"],
-        "user_message": row["user_message"],
-        "response": result["response"],
-        "scores": scores,
-        "judges": judge_results,
-        "elapsed_s": round(elapsed, 2),
-        "notes": row.get("notes", ""),
+        "id": case["id"],
+        "seconds": round(time.perf_counter() - start, 1),
+        "model": agent.MODEL,
+        "report_status": final.get("report_status"),
+        "log_warnings": WARNINGS.lines,
+        "tool_calls": [
+            {"name": c["function"]["name"], "arguments": c["function"]["arguments"]}
+            for m in final.get("conversation_history", []) if m.get("role") == "assistant"
+            for c in m.get("tool_calls") or []
+        ],
+        "checks": run_checks(response, report_html, case.get("expect")),
+        "response": response,
+        "report_html": report_html,
     }
 
 
-async def main():
+def summarize(runs: list[dict]) -> dict:
+    names = list(runs[0]["checks"])
+    return {
+        "runs": len(runs),
+        "prompt_chars": {
+            "agent_system": len(agent.SYSTEM_PROMPT),
+            "agent_tools": len(json.dumps(agent.TOOLS)),
+            "report_system": len(report.REPORT_SPEC_SYSTEM_PROMPT),
+        },
+        "pass_rate": {n: round(sum(r["checks"][n]["pass"] for r in runs) / len(runs), 2) for n in names},
+        "all_pass_rate": round(sum(all(c["pass"] for c in r["checks"].values()) for r in runs) / len(runs), 2),
+        "avg_seconds": round(sum(r["seconds"] for r in runs) / len(runs), 1),
+    }
+
+
+def print_table(current: dict, baseline: dict | None) -> None:
+    def row(name: str, now, before) -> None:
+        delta = "" if before is None or before == now else f"  (baseline {before})"
+        print(f"  {name:<26} {now}{delta}")
+
+    b = baseline or {}
+    print(f"\n{current['runs']} runs")
+    for name, rate in current["pass_rate"].items():
+        row(name, rate, b.get("pass_rate", {}).get(name))
+    row("ALL CHECKS PASS", current["all_pass_rate"], b.get("all_pass_rate"))
+    row("avg seconds", current["avg_seconds"], b.get("avg_seconds"))
+    for name, chars in current["prompt_chars"].items():
+        row(f"{name} chars", chars, b.get("prompt_chars", {}).get(name))
+
+
+async def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--id", help="Run a single row by id")
-    parser.add_argument("--filter", help="Run rows matching a tag (e.g. --filter happy)")
-    parser.add_argument("--save-baseline", action="store_true", help="Save this run as the new baseline")
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--case", help="run only the case with this id")
+    parser.add_argument("--save-baseline", action="store_true")
+    parser.add_argument("--api-dir", help="run a different copy of the api/ directory")
+    parser.add_argument("--rescore", type=Path, help="re-run checks on a saved results file instead of calling the API")
     args = parser.parse_args()
 
-    dataset = load_dataset(args.id, args.filter)
-    if not dataset:
-        print("No matching rows found.")
+    if args.rescore:
+        runs = json.loads((CALLER_CWD / args.rescore).read_text())["runs"]
+        expects = {c["id"]: c.get("expect") for c in load_cases()}
+        for r in runs:
+            r["checks"] = run_checks(r["response"], r["report_html"], expects.get(r["id"]))
+        finish(runs, args.save_baseline, (CALLER_CWD / args.rescore))
         return
 
-    previous = load_results_file(BASELINE_PATH)
+    cases = load_cases()
+    if args.case:
+        cases = [c for c in cases if c["id"] == args.case]
+        if not cases:
+            sys.exit(f"No case with id {args.case!r} in cases.jsonl")
+    runs = []
+    for case in cases:
+        for i in range(args.repeats):
+            print(f"{case['id']} run {i + 1}/{args.repeats}…", flush=True)
+            result = await run_case(case)
+            failed = [n for n, c in result["checks"].items() if not c["pass"]]
+            print(f"  {result['seconds']}s, failed: {', '.join(failed) or 'none'}", flush=True)
+            runs.append(result)
 
-    wait_for_db()
-    print(f"Running {len(dataset)} eval(s)...\n")
+    RESULTS.mkdir(exist_ok=True)
+    finish(runs, args.save_baseline, RESULTS / f"{datetime.now():%Y%m%d-%H%M%S}.json")
 
-    results = []
-    for row in dataset:
-        print(f"  [{row['id']}] {row['user_message'][:60]}...", end=" ", flush=True)
-        result = await run_one(row)
-        results.append(result)
 
-        all_pass = all(result["scores"].values())
-        status = "PASS" if all_pass else "FAIL"
-        judge_summary = " | ".join(
-            f"{name}={j['score']}" for name, j in result["judges"].items()
-        )
-        print(f"{status} ({result['elapsed_s']}s) [{judge_summary}]")
+def finish(runs: list[dict], save_baseline: bool, out: Path) -> None:
+    summary = summarize(runs)
+    out.write_text(json.dumps({"summary": summary, "runs": runs}, indent=2))
 
-        if not all_pass:
-            for scorer_name, passed in result["scores"].items():
-                if not passed:
-                    print(f"    x {scorer_name}")
-
-        for name, j in result["judges"].items():
-            if j["score"] <= 3:
-                print(f"    ! {name}: {j['score']}/5 — {j['reason']}")
-
-    print("\n--- Summary ---")
-    all_scorers: dict[str, list[bool]] = {}
-    for r in results:
-        for name, passed in r["scores"].items():
-            all_scorers.setdefault(name, []).append(passed)
-
-    for name, values in sorted(all_scorers.items()):
-        passed = sum(values)
-        total = len(values)
-        pct = (passed / total) * 100 if total else 0
-        print(f"  {name}: {passed}/{total} ({pct:.0f}%)")
-
-    total_pass = sum(1 for r in results if all(r["scores"].values()))
-    print(f"\n  Overall: {total_pass}/{len(results)} rows fully passing")
-
-    print("\n--- Judge Scores ---")
-    all_judges: dict[str, list[int]] = {}
-    for r in results:
-        for name, j in r.get("judges", {}).items():
-            all_judges.setdefault(name, []).append(j["score"])
-
-    for name, values in sorted(all_judges.items()):
-        valid = [v for v in values if v > 0]
-        if valid:
-            mean = sum(valid) / len(valid)
-            print(f"  {name}: {mean:.1f}/5 (n={len(valid)})")
-        else:
-            print(f"  {name}: no valid scores")
-
-    results_dir = Path(__file__).resolve().parent / "results"
-    results_dir.mkdir(exist_ok=True)
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    out_path = results_dir / f"{timestamp}.jsonl"
-    with open(out_path, "w") as f:
-        for r in results:
-            f.write(json.dumps(r) + "\n")
-    print(f"\n  Results written to {out_path}")
-
-    if args.save_baseline:
-        save_baseline(results)
-
-    if previous:
-        print_diff(results, previous)
-    else:
-        print("\n  No baseline found. Run with --save-baseline to create one.")
+    baseline = json.loads(BASELINE.read_text()) if BASELINE.exists() else None
+    print_table(summary, baseline)
+    if save_baseline:
+        BASELINE.write_text(json.dumps(summary, indent=2) + "\n")
+        print(f"\nSaved baseline to {BASELINE}")
+    print(f"Full outputs: {out}")
 
 
 if __name__ == "__main__":
