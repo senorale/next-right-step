@@ -6,6 +6,7 @@ Endpoints:
 - GET  /health — health check for Railway
 """
 
+import asyncio
 import json
 import logging
 
@@ -14,7 +15,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from agent import run_agent_stream, generate_report, _extract_data_blocks, _json_default
+from intake_validation import validate_intake
+from agent import run_agent_stream, generate_report, path1_data_blocks, _extract_data_blocks, _is_path1, _json_default
 
 app = FastAPI(title="Next Right Step - Agent API")
 
@@ -23,6 +25,12 @@ class ChatRequest(BaseModel):
     message: str
     conversation_history: list[dict] | None = None
     intake_answers: dict | None = None
+
+
+class ValidateIntakeRequest(BaseModel):
+    key: str
+    value: str
+    answers: dict
 
 
 class ReportRetryRequest(BaseModel):
@@ -36,10 +44,19 @@ def health():
     return {"status": "ok"}
 
 
+@app.post("/validate-intake")
+async def validate_intake_step(req: ValidateIntakeRequest):
+    """Checks one free-text intake answer when the user submits the step."""
+    return await validate_intake(req.key, req.value, req.answers)
+
+
 @app.post("/retry-report")
 async def retry_report(req: ReportRetryRequest):
     logger = logging.getLogger(__name__)
     data_blocks = _extract_data_blocks(req.conversation_history)
+    if not data_blocks and _is_path1(req.intake_answers):
+        # Path1 data is gathered in code, so the history has no tool results to reuse.
+        data_blocks = await asyncio.to_thread(path1_data_blocks, req.intake_answers)
     logger.info("retry-report: extracted %d data_blocks", len(data_blocks))
     if not data_blocks:
         return {"summary": "", "html": "", "error": "No tool data found in conversation history"}

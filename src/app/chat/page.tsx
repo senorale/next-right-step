@@ -48,7 +48,7 @@ const PATH_TYPE_STEP: IntakeStep = {
 // Path 1: College vs vocational vs working
 const DATA_SOURCE_STEP: IntakeStep = {
   key: 'data_source',
-  question: "Do you have specific numbers to work with, or should I use national averages?",
+  question: "Do you have specific numbers to work with, or should I use national medians?",
   subtitle: "If you have tuition quotes or salary offers, I can use those instead of medians.",
   options: [
     { value: 'specific', label: "I have specific info (tuition quotes, salary offers, etc.)" },
@@ -234,6 +234,36 @@ function getCurrentFieldStep(answers: Record<string, string>): IntakeStep | null
   }
 }
 
+// Path 4, working users: compare against the current job, or only the named careers to each other.
+const COMPARE_TO_CURRENT_STEP: IntakeStep = {
+  key: 'compare_to_current',
+  question: "Should I include your current job in the comparison?",
+  subtitle: "Or just compare these careers to each other.",
+  options: [
+    { value: 'yes', label: "Yes, compare them against my current job" },
+    { value: 'no', label: "No, just compare these careers to each other" },
+  ],
+  placeholder: "",
+}
+
+const PAYOFF_BASELINE_STEP: IntakeStep = {
+  key: 'payoff_baseline',
+  question: "What should the payoff be measured against?",
+  subtitle: "Payoff counts the pay you give up while in school and how much more you earn after.",
+  options: [
+    { value: 'hs', label: "A high school diploma (national median)" },
+    { value: 'salary', label: "My current salary" },
+  ],
+  placeholder: "",
+}
+
+const CURRENT_SALARY_STEP: IntakeStep = {
+  key: 'current_salary',
+  question: "What's your yearly salary?",
+  subtitle: "Used only to measure the payoff, not shown as a career in the comparison.",
+  placeholder: "e.g. $55,000",
+}
+
 /** Starting-point questions shared by path4 and path5, in order. */
 function getStartingPointStep(answers: Record<string, string>): IntakeStep | null {
   const keys = Object.keys(answers)
@@ -241,7 +271,16 @@ function getStartingPointStep(answers: Record<string, string>): IntakeStep | nul
   if (pastSchool(answers) && !keys.includes('education_level')) return EDUCATION_LEVEL_STEP
   const fieldStep = getCurrentFieldStep(answers)
   if (fieldStep && !keys.includes('current_field')) return fieldStep
-  if (answers.current_position === 'working' && !keys.includes('current_role')) return CURRENT_ROLE_STEP
+  if (answers.current_position !== 'working') return null
+  if (getPathKey(answers) === 'path4') {
+    if (!keys.includes('compare_to_current')) return COMPARE_TO_CURRENT_STEP
+    if (answers.compare_to_current === 'no') {
+      if (!keys.includes('payoff_baseline')) return PAYOFF_BASELINE_STEP
+      if (answers.payoff_baseline === 'salary' && !keys.includes('current_salary')) return CURRENT_SALARY_STEP
+      return null
+    }
+  }
+  if (!keys.includes('current_role')) return CURRENT_ROLE_STEP
   return null
 }
 
@@ -252,7 +291,8 @@ function countStartingPointSteps(answers: Record<string, string>): number {
   if (pos !== 'working' && pos !== 'looking_for_work') return 1
   const level = answers.education_level
   const hasField = !level || !!EDUCATION_LEVELS.find((l) => l.value === level)?.hasField
-  return 2 + (hasField ? 1 : 0) + (pos === 'working' ? 1 : 0)
+  const comparesToCurrent = getPathKey(answers) === 'path4' && pos === 'working' ? 1 : 0
+  return 2 + (hasField ? 1 : 0) + (pos === 'working' ? 1 : 0) + comparesToCurrent
 }
 
 function getRankByStep(answers: Record<string, string>): IntakeStep {
@@ -336,16 +376,59 @@ function estimateTotalSteps(answers: Record<string, string>): number {
   return 5
 }
 
+/** Response from /api/validate-intake (api/intake_validation.py). */
+interface IntakeChoice {
+  label: string
+  set?: Record<string, string>
+  clear?: string[]
+  revalidate?: boolean
+  edit?: boolean
+}
+
+interface IntakeCheck {
+  status: 'ok' | 'confirm' | 'fix'
+  message?: string
+  set?: Record<string, string>
+  choices?: IntakeChoice[]
+}
+
+/** Answers derived from a step by its check; dropped when the user goes back past that step. */
+const DERIVED_KEYS: Record<string, string[]> = {
+  occupation: ['occupation_code', 'occupation_title'],
+  specific_numbers: ['user_numbers'],
+  current_salary: ['current_salary_value'],
+}
+const HIDDEN_KEYS = new Set(Object.values(DERIVED_KEYS).flat())
+
+async function checkIntakeAnswer(key: string, value: string, answers: Record<string, string>): Promise<IntakeCheck> {
+  try {
+    const res = await fetch('/api/validate-intake', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value, answers }),
+    })
+    if (!res.ok) return { status: 'ok' }
+    return (await res.json()) as IntakeCheck
+  } catch {
+    // Never block the intake on a failed check; the report step handles raw answers.
+    return { status: 'ok' }
+  }
+}
+
 function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, string>) => void }) {
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [history, setHistory] = useState<string[]>([])
+  // Last value entered for each step, so going back doesn't make the user retype it.
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [selected, setSelected] = useState('')
   const [selections, setSelections] = useState<string[]>([])
   const [input, setInput] = useState('')
+  const [checking, setChecking] = useState(false)
+  const [check, setCheck] = useState<IntakeCheck | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const current = getNextStep(answers)
-  const answeredCount = Object.keys(answers).length
+  const answeredCount = Object.keys(answers).filter((k) => !HIDDEN_KEYS.has(k)).length
   const totalEstimate = estimateTotalSteps(answers)
   const progress = current ? (answeredCount / totalEstimate) * 100 : 100
 
@@ -355,7 +438,8 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
 
   useEffect(() => {
     if (!current) return
-    const saved = answers[current.key] ?? ''
+    setCheck(null)
+    const saved = answers[current.key] ?? drafts[current.key] ?? ''
     if (current.multiSelect) {
       const allValues = (current.options ?? []).map(optionValue)
       setSelections(saved ? saved.split('|') : allValues)
@@ -373,17 +457,63 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
       ? selected
       : input.trim()
 
-  function advance() {
-    if (!pending || !current) return
-    const next = { ...answers, [current.key]: pending }
-    setHistory((prev) => [...prev, current.key])
+  /** Saves the step's answer (plus anything its check set or cleared) and moves on. */
+  function finish(next: Record<string, string>, clear: string[] = []) {
+    if (!current) return
+    for (const key of clear) delete next[key]
+    const added = Object.keys(next).filter((k) => !(k in answers) && k !== current.key && !HIDDEN_KEYS.has(k))
+    setHistory((prev) => [
+      ...prev.filter((k) => !clear.includes(k)),
+      ...(clear.includes(current.key) ? [] : [current.key]),
+      ...added,
+    ])
+    setDrafts((prev) => ({ ...prev, [current.key]: pending, ...next }))
     setAnswers(next)
+    setCheck(null)
     setSelected('')
     setSelections([])
     setInput('')
     if (!getNextStep(next)) {
       onComplete(next)
     }
+  }
+
+  async function runCheck(value: string, base: Record<string, string>) {
+    if (!current) return
+    setChecking(true)
+    const result = await checkIntakeAnswer(current.key, value, base)
+    setChecking(false)
+    if (result.status === 'ok') finish({ ...base, [current.key]: value, ...(result.set ?? {}) })
+    else setCheck(result)
+  }
+
+  function advance() {
+    if (!pending || !current || checking) return
+    // Free-text answers get checked (one occupation, usable numbers, ...) before moving on.
+    if (!current.options) {
+      runCheck(pending, answers)
+      return
+    }
+    finish({ ...answers, [current.key]: pending })
+  }
+
+  function choose(choice: IntakeChoice) {
+    if (!current) return
+    if (choice.edit) {
+      setCheck(null)
+      inputRef.current?.focus()
+      return
+    }
+    const next = { ...answers, [current.key]: pending, ...(choice.set ?? {}) }
+    if (choice.revalidate) {
+      // The choice replaced this step's answer (e.g. picked one of several occupations).
+      const value = choice.set?.[current.key] ?? pending
+      setInput(value)
+      setCheck(null)
+      runCheck(value, answers)
+      return
+    }
+    finish(next, choice.clear)
   }
 
   function goBack() {
@@ -393,8 +523,10 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
     setAnswers((prev) => {
       const next = { ...prev }
       delete next[lastKey]
+      for (const key of DERIVED_KEYS[lastKey] ?? []) delete next[key]
       return next
     })
+    setCheck(null)
     setSelected('')
     setSelections([])
     setInput('')
@@ -497,6 +629,26 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
               />
             </div>
           )}
+
+          {check && check.status !== 'ok' && (
+            <div role="status" className="space-y-3 rounded-xl border border-primary/40 bg-primary/5 px-4 py-3">
+              {check.message && <p className="text-sm">{check.message}</p>}
+              {check.choices && check.choices.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {check.choices.map((choice) => (
+                    <button
+                      key={choice.label}
+                      onClick={() => choose(choice)}
+                      disabled={checking}
+                      className="rounded-full border-2 border-border px-4 py-2 text-sm transition-all hover:border-primary hover:bg-primary/5 disabled:opacity-50"
+                    >
+                      {choice.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -513,10 +665,10 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
           </Button>
           <Button
             onClick={advance}
-            disabled={!pending}
+            disabled={!pending || checking}
             className="gap-1.5"
           >
-            Next
+            {checking ? 'Checking…' : 'Next'}
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
@@ -882,6 +1034,14 @@ function startingPointLines(answers: Record<string, string>): string[] {
   if (level) lines.push(`- Highest education: ${level.label}`)
   if (answers.current_field) lines.push(`- Field of study: ${answers.current_field}`)
   if (answers.current_role) lines.push(`- Current job: ${answers.current_role}`)
+  if (answers.compare_to_current === 'no') {
+    lines.push('- Compare only these careers to each other, not to my current job')
+    if (answers.payoff_baseline === 'salary' && answers.current_salary_value) {
+      lines.push(`- Measure payoff against my current salary of $${Number(answers.current_salary_value).toLocaleString()}`)
+    } else {
+      lines.push('- Measure payoff against a high school diploma (national median)')
+    }
+  }
   return lines
 }
 
@@ -898,7 +1058,7 @@ function buildPrompt(answers: Record<string, string>): string {
       lines.push('- Data preference: use national medians')
     }
     if (answers.specific_numbers) lines.push(`- My specific numbers: ${answers.specific_numbers}`)
-    if (answers.occupation) lines.push(`- Occupation I'm interested in: ${answers.occupation}`)
+    if (answers.occupation) lines.push(`- Occupation I'm interested in: ${answers.occupation_title ?? answers.occupation}`)
     lines.push('')
     lines.push('Compare these five options side by side: (1) HS diploma baseline, (2) Cashier, (3) Electrician, (4) Bachelor\'s degree median, (5) my chosen occupation. Include full financial analysis with payoff timeline.')
   }
