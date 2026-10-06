@@ -67,10 +67,12 @@ async def main() -> None:
             print(f"{'PASS' if not failed else 'FAIL'} {r['id']} ({r['seconds']}s)" + (f": {failed}" if failed else ""), flush=True)
             runs.append(r)
 
-    names = list(runs[0]["checks"])
+    # Paths run different checks: each rate is over the runs that had that check.
+    names = list(dict.fromkeys(n for r in runs for n in r["checks"]))
     print(f"\n{len(runs)} runs")
     for n in names:
-        print(f"  {n:<26} {sum(r['checks'][n]['pass'] for r in runs) / len(runs):.2f}")
+        had = [r["checks"][n]["pass"] for r in runs if n in r["checks"]]
+        print(f"  {n:<26} {sum(had) / len(had):.2f}  ({len(had)} runs)")
     print(f"  {'ALL CHECKS PASS':<26} {sum(all(c['pass'] for c in r['checks'].values()) for r in runs) / len(runs):.2f}")
     RESULTS.mkdir(exist_ok=True)
     out = RESULTS / f"report-{datetime.now():%Y%m%d-%H%M%S}.json"

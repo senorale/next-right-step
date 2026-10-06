@@ -12,27 +12,16 @@ from pathlib import Path
 
 import run  # noqa: F401  loads .env and puts api/ on the import path
 from run import agent
+import options
 
 EVALS = Path(__file__).resolve().parent
 
 PATH1 = {"path_type": "path1", "data_source": "medians"}
-# Row metric keys behind each compare_metrics choice (path2).
-METRICS = {
-    "Earnings after graduation": ["earnings_6yr_after_entry", "earnings_10yr_after_entry"],
-    "Net price / cost": ["avg_net_price", "tuition_in_state", "tuition_out_of_state"],
-    "Graduation rate": ["graduation_rate"],
-    "Debt at graduation": ["median_debt"],
-    "Admission rate": ["admission_rate"],
-    "Retention rate": ["retention_rate"],
-    "Loan repayment rate": ["loan_repayment_rate_3yr"],
-}
-
-
 def path2(case_id: str, intake: dict, calls: list[dict], expect: dict) -> dict:
     """A path2 case: the search_schools calls a correct agent makes, plus
     expectations; allowed_metrics come from the user's compare_metrics."""
     intake = {"path_type": "path2", **intake}
-    allowed = [k for m in intake["compare_metrics"].split("|") for k in METRICS[m]]
+    allowed = options.allowed_metrics(intake)
     return {"id": case_id, "intake": intake, "calls": [("search_schools", c) for c in calls],
             "expect": {"allowed_metrics": allowed, **expect}}
 

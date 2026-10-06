@@ -33,6 +33,63 @@ SCHOOL_YEARS = {"certificate": 1, "associate": 2, "bachelor": 4, "graduate": 2}
 PROGRAM_YEARS = {1: 1, 2: 2, 3: 4, 4: 1, 5: 2, 6: 5, 7: 4, 8: 1}
 
 
+# The user's own choices, enforced by code rather than left to the report model
+# (like path1's fixed rows): which metrics to show (compare_metrics) and how to
+# order the options (rank_by). Keys are the intake labels in src/app/chat/page.tsx.
+CHOICE_METRICS = {
+    "Earnings after graduation": ["earnings_6yr_after_entry", "earnings_10yr_after_entry"],
+    "Net price / cost": ["avg_net_price", "tuition_in_state", "tuition_out_of_state"],
+    "Graduation rate": ["graduation_rate"],
+    "Debt at graduation": ["median_debt"],
+    "Admission rate": ["admission_rate"],
+    "Retention rate": ["retention_rate"],
+    "Loan repayment rate": ["loan_repayment_rate_3yr"],
+}
+ALWAYS_SHOWN_METRICS = ["median_debt"]  # the cost behind every payoff, chosen or not
+# rank_by -> (row field or metric, highest first)
+RANK_ORDER = {
+    "Earnings after graduation": ("expected_salary", True),
+    "Net price / cost": ("avg_net_price", False),
+    "Graduation rate": ("graduation_rate", True),
+    "Debt at graduation": ("median_debt", False),
+    "Admission rate": ("admission_rate", False),
+    "Retention rate": ("retention_rate", True),
+    "Loan repayment rate": ("loan_repayment_rate_3yr", True),
+}
+
+
+def _choices(intake_answers: dict | None) -> list[str]:
+    return [m for m in ((intake_answers or {}).get("compare_metrics") or "").split("|") if m in CHOICE_METRICS]
+
+
+def allowed_metrics(intake_answers: dict | None) -> list[str] | None:
+    """Metric keys the report may show as table columns; None = any."""
+    chosen = _choices(intake_answers)
+    if not chosen:
+        return None
+    return list(dict.fromkeys([k for m in chosen for k in CHOICE_METRICS[m]] + ALWAYS_SHOWN_METRICS))
+
+
+def _value(row: dict, key: str):
+    return row.get(key) if key in row else (row.get("metrics") or {}).get(key)
+
+
+def rank_rows(options: list[dict], intake_answers: dict | None) -> list[dict]:
+    """Orders the options that have the user's rank_by metric (the only chosen
+    metric counts as rank_by); others (baselines) keep their places."""
+    chosen = _choices(intake_answers)
+    rank = (intake_answers or {}).get("rank_by") or (chosen[0] if len(chosen) == 1 else None)
+    if rank not in RANK_ORDER:
+        return options
+    key, highest_first = RANK_ORDER[rank]
+    slots = [i for i, o in enumerate(options) if not o["option_id"].startswith("baseline:") and _value(o, key) is not None]
+    ranked = sorted((options[i] for i in slots), key=lambda o: _value(o, key), reverse=highest_first)
+    ordered = list(options)
+    for i, row in zip(slots, ranked):
+        ordered[i] = row
+    return ordered
+
+
 def baseline_rows(intake_answers: dict | None) -> list[dict]:
     """Rows every report can compare against: high school, the bachelor's
     median, and the user's current salary when they gave one."""

@@ -28,7 +28,7 @@ from db import (
     search_occupations,
 )
 from career_cost import path1_options
-from options import candidate_rows, pairwise_gaps, with_rows
+from options import allowed_metrics, candidate_rows, pairwise_gaps, with_rows
 from user_numbers import extract_user_numbers
 from report import REPORT_PROMPT, render_report, report_schema
 
@@ -299,6 +299,12 @@ def build_report_input(intake_answers: dict, data_blocks: list[dict]) -> tuple[d
     row gathered, and the gaps between them. Raw tool results stay out, so the
     only numbers the model sees are the ones code renders."""
     rows = candidate_rows(intake_answers, data_blocks)
+    allowed = allowed_metrics(intake_answers)
+    if allowed is not None:
+        # Only the metrics the user chose reach the model, so its text can't
+        # cite one the report doesn't show.
+        rows = [{**r, "metrics": {k: v for k, v in r["metrics"].items() if k in allowed}} if "metrics" in r else r
+                for r in rows]
     content = {"intake_answers": intake_answers, "rows": rows, "gaps": pairwise_gaps(rows)}
     return content, rows
 
@@ -359,7 +365,7 @@ async def write_report(content: dict, agent_text: str):
         ],
         # Numbers come from code, so variety only adds risk (e.g. garbled figures).
         temperature=0,
-        response_format={"type": "json_schema", "json_schema": {"name": "report", "schema": report_schema(rows)}},
+        response_format={"type": "json_schema", "json_schema": {"name": "report", "schema": report_schema(rows, content.get("intake_answers"))}},
         stream=True,
         stream_options={"include_usage": True},
     )
@@ -396,7 +402,7 @@ async def write_report(content: dict, agent_text: str):
     yield _progress("Finalizing your report…", "rendering", RENDERING_PERCENT)
     # The headline doubles as the chat reply.
     reply = parsed.get("headline") or agent_text
-    parsed = {"summary": reply, "html": render_report(parsed, rows)}
+    parsed = {"summary": reply, "html": render_report(parsed, rows, content.get("intake_answers"))}
 
     logger.info("Report parsed OK: summary=%d chars, html=%d chars", len(parsed.get("summary", "")), len(parsed.get("html", "")))
     yield {"event": "report", "report": parsed}

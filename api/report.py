@@ -12,6 +12,8 @@ import html
 import math
 from datetime import date
 
+from options import allowed_metrics, rank_rows
+
 # BLS median usual weekly earnings for high school graduates x 52. The prompt's
 # bachelor's figure (77636) is the same measure; both match
 # src/app/constants/college_related_constants.ts.
@@ -48,7 +50,7 @@ Numbers:
 
 Per path:
 - path1: college vs a trade vs working now. Show every row compare_education_paths returned. The headline states figures: with a user_numbers row, the user's salary and debt against the national median; otherwise whether the chosen occupation needs graduate school, its total years of school, median salary, and median debt, and, if it does, its years beyond a bachelor's and its salary and debt gaps against the bachelor's row.
-- path2: show only the schools they named (not other campuses a search returned), or for a location the schools found, best first by rank_by. table_metrics: only the metrics in compare_metrics.
+- path2: show only the schools they named (not other campuses a search returned), or for a location the schools found. Code orders them by rank_by and limits table_metrics to what they chose.
 - path3: compare the programs: school earnings against national pay for the occupations they lead to.
 - path4: compare the careers, and their current job unless compare_to_current is "no". Past school may not count toward a new career.
 - path5: a roadmap from their current role to the target: ordered steps with the typical time for each.
@@ -57,11 +59,14 @@ Per path:
 _TEXT = {"type": "string"}
 
 
-def report_schema(rows: list[dict]) -> dict:
+def report_schema(rows: list[dict], intake_answers: dict | None = None) -> dict:
     """The shape the report model must return; the API enforces it. option ids
-    and metric keys are limited to the rows the model was given."""
+    are limited to the rows the model was given, metric keys to those rows'
+    metrics the user chose (options.allowed_metrics)."""
     ids = {"type": "string", "enum": [r["option_id"] for r in rows]}
-    metrics = sorted({k for r in rows for k in (r.get("metrics") or {}) if k in METRIC_FORMATS})
+    allowed = allowed_metrics(intake_answers)
+    metrics = sorted({k for r in rows for k in (r.get("metrics") or {})
+                      if k in METRIC_FORMATS and (allowed is None or k in allowed)})
     metric = {"type": "string", "enum": metrics} if metrics else _TEXT
     return {
         "type": "object",
@@ -379,11 +384,21 @@ SAVE_BUTTON = (
 )
 
 
-def render_report(spec: dict, rows: list[dict]) -> str:
+def render_report(spec: dict, rows: list[dict], intake_answers: dict | None = None) -> str:
     """rows: every option row the model could pick (options.candidate_rows).
-    The report shows the ones it picked, in its order, with their own numbers."""
+    The report shows the ones it picked with their own numbers, in the user's
+    rank_by order when they chose one, else the model's; metric tables keep to
+    the metrics the user chose."""
     by_id = {r["option_id"]: r for r in rows}
     options = [by_id[i] for i in dict.fromkeys(spec.get("option_ids") or []) if i in by_id]
+    options = rank_rows(options, intake_answers)
+    allowed = allowed_metrics(intake_answers)
+    if allowed is not None:
+        # Backstop for a model that ignores the schema's enum.
+        spec = {**spec, "sections": [
+            {**sec, "table_metrics": [k for k in sec.get("table_metrics") or [] if k in allowed]}
+            for sec in spec.get("sections") or [] if isinstance(sec, dict)
+        ]}
     # Payoff is measured against the user's current salary when they gave one.
     baseline = by_id.get("baseline:current") or by_id.get("baseline:hs") or {}
     baseline_salary = _num(baseline.get("expected_salary"), HS_SALARY) or HS_SALARY
