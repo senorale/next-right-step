@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback, FormEvent } from 'react'
-import { Send, RotateCcw, ArrowRight, ArrowLeft, FileText } from 'lucide-react'
+import { Send, RotateCcw, ArrowRight, ArrowLeft, FileText, AlertTriangle } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -12,6 +13,11 @@ import { EDUCATION_LEVELS, POSITIONS } from '@/app/career-path/gap'
 interface IntakeOption {
   value: string
   label: string
+  /** Shown with a warning but can't be selected; reason explains why. */
+  disabled?: boolean
+  reason?: string
+  /** Multi-select: selected at first. Without any, every option starts selected. */
+  preselect?: boolean
 }
 
 interface IntakeStep {
@@ -20,6 +26,8 @@ interface IntakeStep {
   subtitle: string
   options?: (string | IntakeOption)[]
   multiSelect?: boolean
+  /** Most options a multi-select step accepts. */
+  maxSelect?: number
   placeholder: string
 }
 
@@ -306,6 +314,60 @@ function getRankByStep(answers: Record<string, string>): IntakeStep {
   }
 }
 
+/** Schools the check on target_schools found for what the user typed. */
+function schoolCandidates(answers: Record<string, string>): (IntakeOption & { name: string })[] {
+  try {
+    return JSON.parse(answers.school_candidates ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+function getSchoolPicksStep(answers: Record<string, string>): IntakeStep {
+  return {
+    key: 'school_picks',
+    question: 'Which schools do you mean?',
+    subtitle: "These match what you typed. Select the ones you mean (up to 5).",
+    options: schoolCandidates(answers).map(({ value, label, disabled, reason, preselect }) => ({ value, label, disabled, reason, preselect })),
+    multiSelect: true,
+    maxSelect: 5,
+    placeholder: '',
+  }
+}
+
+/** Names of the schools the user kept, else what they typed. */
+function pickedSchoolNames(answers: Record<string, string>): string | undefined {
+  const picks = (answers.school_picks ?? '').split('|').filter(Boolean)
+  const names = schoolCandidates(answers).filter((c) => picks.includes(c.value)).map((c) => c.name)
+  return names.length > 0 ? names.join(', ') : answers.target_schools
+}
+
+/** An option that can't be picked: muted, with a warning icon and a tooltip saying why. */
+function DisabledOption({ label, reason }: { label: string; reason: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <TooltipProvider>
+      <Tooltip open={open} onOpenChange={setOpen}>
+        <TooltipTrigger asChild>
+          <span
+            role="button"
+            aria-disabled="true"
+            tabIndex={0}
+            onClick={() => setOpen(!open)}
+            className="inline-flex cursor-help items-center gap-1.5 rounded-full border-2 border-dashed border-border px-4 py-2 text-sm text-muted-foreground"
+          >
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            {label}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent sideOffset={5} className="max-w-sm">
+          {reason}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 function getPathKey(answers: Record<string, string>): string {
   return answers.path_type ?? ''
 }
@@ -328,6 +390,7 @@ function getNextStep(answers: Record<string, string>): IntakeStep | null {
     if (!keys.includes('has_specific_schools')) return HAS_SPECIFIC_SCHOOLS_STEP
     const hasSchools = answers.has_specific_schools === 'yes'
     if (hasSchools && !keys.includes('target_schools')) return TARGET_SCHOOLS_STEP
+    if (hasSchools && !keys.includes('school_picks')) return getSchoolPicksStep(answers)
     if (!hasSchools && !keys.includes('target_location')) return TARGET_LOCATION_STEP
     if (!keys.includes('compare_metrics')) return COMPARE_METRICS_STEP
     const metrics = (answers.compare_metrics ?? '').split('|').filter(Boolean)
@@ -365,7 +428,8 @@ function estimateTotalSteps(answers: Record<string, string>): number {
   }
   if (path === 'path2') {
     const metrics = (answers.compare_metrics ?? '').split('|').filter(Boolean)
-    return metrics.length > 1 ? 5 : 4
+    const picks = answers.has_specific_schools === 'yes' ? 1 : 0
+    return (metrics.length > 1 ? 5 : 4) + picks
   }
   if (path === 'path3') {
     return answers.school_situation === 'switching' ? 6 : 5
@@ -395,6 +459,7 @@ interface IntakeCheck {
 /** Answers derived from a step by its check; dropped when the user goes back past that step. */
 const DERIVED_KEYS: Record<string, string[]> = {
   occupation: ['occupation_code', 'occupation_title'],
+  target_schools: ['school_candidates'],
   specific_numbers: ['user_numbers'],
   current_salary: ['current_salary_value'],
 }
@@ -441,8 +506,10 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
     setCheck(null)
     const saved = answers[current.key] ?? drafts[current.key] ?? ''
     if (current.multiSelect) {
-      const allValues = (current.options ?? []).map(optionValue)
-      setSelections(saved ? saved.split('|') : allValues)
+      const options = (current.options ?? []).filter((o) => typeof o === 'string' || !o.disabled)
+      const preselected = options.filter((o) => typeof o !== 'string' && o.preselect)
+      const initial = options.some((o) => typeof o !== 'string' && o.preselect !== undefined) ? preselected : options
+      setSelections(saved ? saved.split('|') : initial.map(optionValue))
       setSelected('')
     } else {
       setSelected(saved)
@@ -451,11 +518,15 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
     setInput(saved)
   }, [current?.key])
 
+  // Multi-select answers keep the options' order, not click order, so later
+  // steps (e.g. rank by) list them the same way.
   const pending = current?.multiSelect
-    ? (selections.length > 0 ? selections.join('|') : '')
+    ? (current.options ?? []).map(optionValue).filter((v) => selections.includes(v)).join('|')
     : current?.options
       ? selected
       : input.trim()
+
+  const tooMany = !!current?.maxSelect && selections.length > current.maxSelect
 
   /** Saves the step's answer (plus anything its check set or cleared) and moves on. */
   function finish(next: Record<string, string>, clear: string[] = []) {
@@ -488,7 +559,7 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
   }
 
   function advance() {
-    if (!pending || !current || checking) return
+    if (!pending || !current || checking || tooMany) return
     // Free-text answers get checked (one occupation, usable numbers, ...) before moving on.
     if (!current.options) {
       runCheck(pending, answers)
@@ -578,6 +649,9 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
               {current.options.map((option) => {
                 const value = optionValue(option)
                 const label = optionLabel(option)
+                if (typeof option !== 'string' && option.disabled) {
+                  return <DisabledOption key={value} label={label} reason={option.reason ?? ''} />
+                }
                 const isSelected = current.multiSelect
                   ? selections.includes(value)
                   : selected === value
@@ -665,7 +739,7 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
           </Button>
           <Button
             onClick={advance}
-            disabled={!pending || checking}
+            disabled={!pending || checking || tooMany}
             className="gap-1.5"
           >
             {checking ? 'Checking…' : 'Next'}
@@ -1065,7 +1139,7 @@ function buildPrompt(answers: Record<string, string>): string {
 
   if (path === 'path2') {
     lines.push(`- I've decided on college, comparing schools`)
-    if (answers.target_schools) lines.push(`- Schools to compare: ${answers.target_schools}`)
+    if (answers.target_schools) lines.push(`- Schools to compare: ${pickedSchoolNames(answers)}`)
     if (answers.target_location) lines.push(`- Location: ${answers.target_location}`)
     if (answers.compare_metrics) {
       const metrics = answers.compare_metrics.split('|')

@@ -122,7 +122,7 @@ def _retry_delay_for(exc: Exception) -> float:
 TOOLS = [
     {
         "name": "search_schools",
-        "description": "Search colleges by name, state, or both. Returns up to 5 matches (graduation rate >= 70%) with tuition, net price by income, graduation rate, median debt, earnings, admission rate, retention rate, and loan repayment. Defaults to bachelor's-degree-granting schools. Use filter and sort params based on user's intake preferences.",
+        "description": "Search colleges by name, state, or both. Returns up to 5 matches with tuition, net price by income, graduation rate, median debt, earnings, admission rate, retention rate, and loan repayment. Defaults to bachelor's-degree-granting schools. Use filter and sort params based on user's intake preferences.",
         "input_schema": {
             "type": "object",
             "properties": {

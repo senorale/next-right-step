@@ -48,7 +48,7 @@ Numbers:
 
 Per path:
 - path1: college vs a trade vs working now. Show every row compare_education_paths returned. The headline states figures: with a user_numbers row, the user's salary and debt against the national median; otherwise whether the chosen occupation needs graduate school, its total years of school, median salary, and median debt, and, if it does, its years beyond a bachelor's and its salary and debt gaps against the bachelor's row.
-- path2: compare the schools on the metrics they chose, ranked by rank_by.
+- path2: show only the schools they named (not other campuses a search returned), or for a location the schools found, best first by rank_by. table_metrics: only the metrics in compare_metrics.
 - path3: compare the programs: school earnings against national pay for the occupations they lead to.
 - path4: compare the careers, and their current job unless compare_to_current is "no". Past school may not count toward a new career.
 - path5: a roadmap from their current role to the target: ordered steps with the typical time for each.

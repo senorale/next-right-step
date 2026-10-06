@@ -104,24 +104,36 @@ def occupation_rows(result: dict) -> list[dict]:
     return rows
 
 
+def school_missing(school: dict) -> list[str]:
+    """What a school lacks for a comparison: earnings (every salary and payoff)
+    and median debt (the education cost; without it payoff looks instant)."""
+    missing = []
+    if not (school.get("earnings_10yr_after_entry") or school.get("earnings_6yr_after_entry")):
+        missing.append("earnings after graduation")
+    if not school.get("median_debt"):
+        missing.append("median debt at graduation")
+    return missing
+
+
 def school_rows(result: dict, degree_type: str | None) -> list[dict]:
-    """search_schools: each school with earnings data. Cost is the school's
-    median debt at graduation; salary is graduates' earnings 10 years after entry."""
+    """search_schools: each school with the data to compare (school_missing).
+    Cost is the school's median debt at graduation; salary is students'
+    earnings 10 years after entry."""
     years = SCHOOL_YEARS.get((degree_type or "bachelor").lower(), BACHELOR_YEARS)
     rows = []
     for s in result.get("results") or []:
-        salary = s.get("earnings_10yr_after_entry") or s.get("earnings_6yr_after_entry")
-        if not salary:
+        if school_missing(s):
             continue
+        salary = s.get("earnings_10yr_after_entry") or s.get("earnings_6yr_after_entry")
         rows.append({
             "option_id": f"school:{s['school_id']}",
             "name": s["name"],
+            "state": s.get("state"),
             "short_label": s["name"],
             "education": f"{s.get('type') or ''} school, {s.get('city')}, {s.get('state')}".strip(", "),
             "years_in_school": years,
-            "debt": s.get("median_debt") or 0,
-            "cost_basis": "This school's median debt at graduation (College Scorecard)" if s.get("median_debt")
-            else "No debt data for this school",
+            "debt": s["median_debt"],
+            "cost_basis": "This school's median debt at graduation (College Scorecard)",
             "expected_salary": salary,
             "salary_basis": "College Scorecard median earnings of this school's students "
             + ("10" if s.get("earnings_10yr_after_entry") else "6") + " years after entry",
@@ -206,13 +218,17 @@ def pairwise_gaps(rows: list[dict]) -> list[dict]:
     for i, a in enumerate(rows):
         for b in rows[i + 1:]:
             gap = {"options": [a["option_id"], b["option_id"]]}
-            for field, label in (("expected_salary", "salary"), ("debt", "debt"), ("years_in_school", "years")):
-                va, vb = a.get(field), b.get(field)
+            # Metrics both rows have (school vs school, program vs program).
+            ma, mb = a.get("metrics") or {}, b.get("metrics") or {}
+            shared = [(k, k) for k in ma if k in mb and not isinstance(ma[k], bool)]
+            for field, label in (("expected_salary", "salary"), ("debt", "debt"), ("years_in_school", "years"), *shared):
+                va = a.get(field) if field in a else ma.get(field)
+                vb = b.get(field) if field in b else mb.get(field)
                 if va is None or vb is None or va == vb:
                     continue
                 higher = a if va > vb else b
                 diff = abs(va - vb)
                 gap[f"higher_{label}"] = higher["option_id"]
-                gap[f"{label}_difference"] = round(diff) if label != "years" else diff
+                gap[f"{label}_difference"] = diff if label == "years" or label in RATE_METRICS else round(diff)
             gaps.append(gap)
     return gaps

@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 import run  # noqa: F401  loads .env, puts api/ on the import path, collects warnings
-from checks import run_checks
+from checks import choice_checks, run_checks
 from run import WARNINGS, agent
 
 EVALS = Path(__file__).resolve().parent
@@ -39,7 +39,7 @@ async def run_case(case: dict) -> dict:
     return {
         "id": case["id"],
         "seconds": round(time.perf_counter() - start, 1),
-        "checks": run_checks(summary, html, case.get("expect")),
+        "checks": {**run_checks(summary, html, case.get("expect")), **choice_checks(html, content["rows"], case.get("expect"))},
         "warnings": list(WARNINGS.lines),
         "summary": summary,
         "report_html": html,

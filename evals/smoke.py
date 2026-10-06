@@ -29,8 +29,10 @@ LABELS = {
 }
 POSITIONS = {"working": "Working", "in_college": "In college", "high_school": "In high school", "looking_for_work": "Looking for work"}
 LEVELS = {"some_college": "Some college, no degree", "associate": "Associate's", "bachelor": "Bachelor's", "hs": "High school diploma or GED"}
+# METRIC_TO_SORT in src/app/chat/page.tsx
 SORT = {"Earnings after graduation": "earnings", "Graduation rate": "graduation_rate", "Net price / cost": "net_price",
-        "Debt at graduation": "median_debt"}
+        "Debt at graduation": "median_debt", "Admission rate": "admission_rate", "Retention rate": "retention_rate",
+        "Loan repayment rate": "loan_repayment"}
 
 
 def chat_message(a: dict) -> str:
@@ -40,7 +42,7 @@ def chat_message(a: dict) -> str:
     if path == "path2":
         lines.append("- I've decided on college, comparing schools")
         if a.get("target_schools"):
-            lines.append(f"- Schools to compare: {a['target_schools']}")
+            lines.append(f"- Schools to compare: {a.get('school_names') or a['target_schools']}")
         if a.get("target_location"):
             lines.append(f"- Location: {a['target_location']}")
         lines.append(f"- Compare on: {', '.join(a['compare_metrics'].split('|'))}")

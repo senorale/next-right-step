@@ -26,6 +26,14 @@ def check(result: dict, expect: dict) -> list[str]:
     problems = []
     if result.get("status") != expect["status"]:
         problems.append(f"status {result.get('status')!r}, expected {expect['status']!r} ({result.get('message', '')})")
+    candidates = json.loads((result.get("set") or {}).get("school_candidates") or "[]")
+    picked = [int(o["value"]) for o in candidates if o.get("preselect")]
+    if "preselected" in expect and picked != expect["preselected"]:
+        problems.append(f"preselected {picked}, expected {expect['preselected']}")
+    offered = {int(o["value"]) for o in candidates}
+    problems += [f"not offered: {i}" for i in expect.get("offered_include", []) if i not in offered]
+    disabled = {int(o["value"]) for o in candidates if o.get("disabled")}
+    problems += [f"not marked ineligible: {i}" for i in expect.get("disabled_include", []) if i not in disabled]
     for key, value in expect.get("set", {}).items():
         if (result.get("set") or {}).get(key) != value:
             problems.append(f"set.{key} = {(result.get('set') or {}).get(key)!r}, expected {value!r}")

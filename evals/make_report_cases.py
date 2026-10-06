@@ -16,6 +16,27 @@ from run import agent
 EVALS = Path(__file__).resolve().parent
 
 PATH1 = {"path_type": "path1", "data_source": "medians"}
+# Row metric keys behind each compare_metrics choice (path2).
+METRICS = {
+    "Earnings after graduation": ["earnings_6yr_after_entry", "earnings_10yr_after_entry"],
+    "Net price / cost": ["avg_net_price", "tuition_in_state", "tuition_out_of_state"],
+    "Graduation rate": ["graduation_rate"],
+    "Debt at graduation": ["median_debt"],
+    "Admission rate": ["admission_rate"],
+    "Retention rate": ["retention_rate"],
+    "Loan repayment rate": ["loan_repayment_rate_3yr"],
+}
+
+
+def path2(case_id: str, intake: dict, calls: list[dict], expect: dict) -> dict:
+    """A path2 case: the search_schools calls a correct agent makes, plus
+    expectations; allowed_metrics come from the user's compare_metrics."""
+    intake = {"path_type": "path2", **intake}
+    allowed = [k for m in intake["compare_metrics"].split("|") for k in METRICS[m]]
+    return {"id": case_id, "intake": intake, "calls": [("search_schools", c) for c in calls],
+            "expect": {"allowed_metrics": allowed, **expect}}
+
+
 CASES = [
     # required_figures: numbers the report's text must state (exact, or rounded for dollar amounts).
     {"id": "path1-lawyer-medians", "intake": {**PATH1, "occupation": "lawyer", "occupation_code": "23-1011"},
@@ -38,6 +59,25 @@ CASES = [
      "expect": {"required_figures": [61590]}},
     {"id": "path1-capped-salary", "intake": {**PATH1, "occupation": "pathologist", "occupation_code": "29-1222"},
      "expect": {"required_figures": [10, 6]}},
+    # ranked_by: [row field or metric, "asc" | "desc"] the shown schools must follow.
+    path2("path2-named-schools",
+          {"has_specific_schools": "yes", "target_schools": "University of Florida, Georgia Tech, NYU",
+           "compare_metrics": "Earnings after graduation|Net price / cost|Graduation rate", "rank_by": "Earnings after graduation"},
+          [{"name": "University of Florida", "sort_by": "earnings"}, {"name": "Georgia Institute of Technology", "sort_by": "earnings"},
+           {"name": "New York University", "sort_by": "earnings"}],
+          {"required_options": ["school:134130", "school:139755", "school:193900"], "forbidden_options": ["school:484473"],
+           "ranked_by": ["expected_salary", "desc"], "required_figures": [102772]}),
+    path2("path2-abbreviations",
+          {"has_specific_schools": "yes", "target_schools": "UF and FSU",
+           "compare_metrics": "Net price / cost|Debt at graduation", "rank_by": "Net price / cost"},
+          [{"name": "University of Florida", "sort_by": "net_price"}, {"name": "Florida State University", "sort_by": "net_price"}],
+          {"required_options": ["school:134130", "school:134097"], "forbidden_options": ["school:484473"],
+           "ranked_by": ["avg_net_price", "asc"]}),
+    path2("path2-by-state",
+          {"has_specific_schools": "no", "target_location": "Colorado",
+           "compare_metrics": "Net price / cost|Graduation rate", "rank_by": "Net price / cost"},
+          [{"state": "CO", "sort_by": "net_price"}],
+          {"min_options": ["school:", 3], "ranked_by": ["avg_net_price", "asc"]}),
 ]
 
 
@@ -45,14 +85,16 @@ def main() -> None:
     lines = []
     for case in CASES:
         intake = case["intake"]
-        # What the agent gets back when it calls compare_education_paths.
-        call = agent._dispatch_for(case.get("user_numbers") or {})["compare_education_paths"]
-        data_blocks = [{"type": "compare_education_paths", "data": call({"occupation_code": intake["occupation_code"]})}]
+        # What the agent gets back from the calls a correct run makes.
+        tools = agent._dispatch_for(case.get("user_numbers") or {})
+        calls = case.get("calls") or [("compare_education_paths", {"occupation_code": intake["occupation_code"]})]
+        data_blocks = [{"type": name, "data": tools[name](args)} for name, args in calls]
+        for block in data_blocks:
+            if "error" in block["data"]:
+                raise SystemExit(f"{case['id']}: {block['data']['error']}")
         content, rows = agent.build_report_input(intake, data_blocks)
-        if "error" in data_blocks[0]["data"]:
-            raise SystemExit(f"{case['id']}: {data_blocks[0]['data']['error']}")
         lines.append(json.dumps({"id": case["id"], "report_input": content, "expect": case["expect"]}, default=str))
-        chosen = [r for r in rows if r["option_id"].startswith(f"occ:{intake['occupation_code']}")]
+        chosen = [r for r in rows if r["option_id"].startswith((f"occ:{intake.get('occupation_code')}", "school:"))]
         print(case["id"], [(o["name"], o["years_in_school"], o["debt"], o["expected_salary"]) for o in chosen])
     (EVALS / "report_cases.jsonl").write_text("\n".join(lines) + "\n")
     print(f"wrote {len(lines)} cases")

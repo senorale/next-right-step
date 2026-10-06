@@ -9,3 +9,11 @@
 {"id": "numbers-k-shorthand", "key": "specific_numbers", "value": "school will cost about 80k total and I'd hope to make 70k", "answers": {"path_type": "path1", "data_source": "specific"}, "expect": {"status": "confirm", "user_numbers": {"total_education_cost": 80000, "expected_salary": 70000}}}
 {"id": "numbers-none", "key": "specific_numbers", "value": "not sure honestly, probably expensive", "answers": {"path_type": "path1", "data_source": "specific"}, "expect": {"status": "fix", "choices_include": ["Use national medians instead"]}}
 {"id": "no-check-for-step", "key": "careers_to_compare", "value": "nurse, teacher", "answers": {"path_type": "path4"}, "expect": {"status": "ok"}}
+{"id": "schools-abbreviations", "key": "target_schools", "value": "UF and FSU", "answers": {"path_type": "path2", "has_specific_schools": "yes"}, "expect": {"status": "ok", "preselected": [134130, 134097]}}
+{"id": "schools-nicknames", "key": "target_schools", "value": "Georgia Tech, NYU", "answers": {"path_type": "path2", "has_specific_schools": "yes"}, "expect": {"status": "ok", "preselected": [139755, 193900]}}
+{"id": "schools-typo", "key": "target_schools", "value": "Univeristy of Flordia", "answers": {"path_type": "path2", "has_specific_schools": "yes"}, "expect": {"status": "ok", "preselected": [134130]}}
+{"id": "schools-online-campus", "key": "target_schools", "value": "University of Florida-Online", "answers": {"path_type": "path2", "has_specific_schools": "yes"}, "expect": {"status": "ok", "preselected": [484473]}}
+{"id": "schools-ambiguous", "key": "target_schools", "value": "Miami", "answers": {"path_type": "path2", "has_specific_schools": "yes"}, "expect": {"status": "ok", "preselected": [135726], "offered_include": [204024]}}
+{"id": "schools-no-data", "key": "target_schools", "value": "Naval Academy and Georgia Tech", "answers": {"path_type": "path2", "has_specific_schools": "yes"}, "expect": {"status": "ok", "preselected": [139755], "disabled_include": [164155]}}
+{"id": "schools-too-many", "key": "target_schools", "value": "UF, FSU, UCF, USF, FIU, FAMU", "answers": {"path_type": "path2", "has_specific_schools": "yes"}, "expect": {"status": "fix"}}
+{"id": "schools-none-named", "key": "target_schools", "value": "something affordable near the beach", "answers": {"path_type": "path2", "has_specific_schools": "yes"}, "expect": {"status": "fix"}}

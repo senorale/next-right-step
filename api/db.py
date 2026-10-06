@@ -415,7 +415,9 @@ def _query_local_schools(
     sort_by: str | None,
     degree: int | None,
 ) -> list[dict]:
-    where = [
+    # Browsing (by state) keeps to schools with a 70%+ graduation rate and full
+    # data. A school the user names is always found; callers check its data.
+    where = [] if name else [
         "graduation_rate >= :min_grad",
         "median_debt IS NOT NULL",
         "earnings_10yr IS NOT NULL",
@@ -477,6 +479,14 @@ def _school_result(s: dict) -> dict:
     }
 
 
+def _prefer_exact(schools: list[dict], name: str | None) -> list[dict]:
+    """A name search matches substrings, so "University of Florida" also finds
+    "University of Florida-Online". When a school's name is exactly the search,
+    return only it."""
+    exact = [s for s in schools if name and s["name"].lower() == name.strip().lower()]
+    return exact or schools
+
+
 def search_schools(
     name: str | None = None,
     state: str | None = None,
@@ -500,7 +510,7 @@ def search_schools(
     args = (name, state, ownership, max_net_price, size, sort_by, degree)
     schools = _query_local_schools(*args)
     if schools:
-        return {"results": [_school_result(s) for s in schools], "source": "db"}
+        return {"results": [_school_result(s) for s in _prefer_exact(schools, name)], "source": "db"}
 
     if not SCORECARD_API_KEY:
         return {"results": [], "source": "db"}
@@ -531,7 +541,7 @@ def search_schools(
 
     rows = [s for s in (_map_school(r) for r in resp.json().get("results", [])) if s is not None]
     _insert_schools(rows, update_existing=True)
-    return {"results": [_school_result(s) for s in _query_local_schools(*args)], "source": "scorecard"}
+    return {"results": [_school_result(s) for s in _prefer_exact(_query_local_schools(*args), name)], "source": "scorecard"}
 
 
 _PROGRAM_PREFIX = "latest.programs.cip_4_digit"

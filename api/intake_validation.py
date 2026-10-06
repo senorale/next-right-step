@@ -23,7 +23,8 @@ import json
 import logging
 import re
 
-from db import search_occupations
+from db import search_occupations, search_schools
+from options import school_missing
 from llm import MODEL, client
 from user_numbers import _numbers_in, extract_user_numbers
 
@@ -124,6 +125,111 @@ async def validate_single_occupation(value: str, answers: dict) -> dict:
     }
 
 
+MAX_SCHOOLS = 5  # the schools step lets the user keep at most this many
+MAX_GUESSES = 3  # candidate schools per name the user typed
+MAX_OPTIONS = 12  # schools shown on the picks step
+SCHOOLS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "schools": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "typed": {"type": "string", "description": "The school as the user wrote it"},
+                    "candidates": {"type": "array", "items": {"type": "string"},
+                                   "description": "Full official names of schools it could mean, most likely first"},
+                },
+                "required": ["typed", "candidates"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["schools"],
+    "additionalProperties": False,
+}
+SCHOOLS_PROMPT = (
+    f"For each college or university the user names, list up to {MAX_GUESSES} full official names of schools "
+    "it could mean, most likely first (UF -> University of Florida, University of Findlay). Expand abbreviations, "
+    "nicknames, and typos. A name that is already a full official name gets only that name; keep campus and "
+    "online designations. Return an empty list if they name no school."
+)
+
+
+async def guess_schools(text: str) -> list[dict] | None:
+    """[{"typed", "candidates"}] for each school named in free text; None when the model call fails."""
+    try:
+        response = await client.chat.completions.create(
+            model=MODEL,
+            max_tokens=512,
+            temperature=0,
+            messages=[{"role": "system", "content": SCHOOLS_PROMPT}, {"role": "user", "content": text}],
+            response_format={"type": "json_schema", "json_schema": {"name": "schools", "schema": SCHOOLS_SCHEMA}},
+        )
+        named = json.loads(response.choices[0].message.content or "{}").get("schools", [])
+        return [n for n in named if isinstance(n, dict) and n.get("typed")]
+    except Exception:
+        logger.exception("Guessing schools failed")
+        return None
+
+
+def _school_option(school: dict) -> dict:
+    option = {"value": str(school["school_id"]), "label": f"{school['name']} ({school['city']}, {school['state']})",
+              "name": school["name"]}
+    missing = school_missing(school)
+    if missing:
+        option["disabled"] = True
+        option["reason"] = (
+            f"Can't be compared: College Scorecard has no {' or '.join(missing)} for this school, "
+            "and the report needs both to compare cost and pay."
+        )
+    return option
+
+
+def _find_schools(names: list[str]) -> list[dict]:
+    """Schools in the data for each candidate name, best match first, no repeats.
+    An exact name returns only that school; a partial one ("University of
+    Texas") can return several."""
+    found: dict[int, dict] = {}
+    for name in names:
+        for school in search_schools(name).get("results", [])[:2]:
+            found.setdefault(school["school_id"], school)
+    return list(found.values())
+
+
+async def validate_target_schools(value: str, answers: dict) -> dict:
+    """Path2 named schools. Finds every school each name could mean ("UF":
+    University of Florida, University of Findlay) for the next step
+    (school_picks), with the best comparable match for each name preselected.
+    Schools without the data to compare are shown but can't be picked."""
+    named = await guess_schools(value)
+    if named is None:
+        # Model call failed: search what the user typed.
+        named = [{"typed": n.strip(), "candidates": [n.strip()]} for n in re.split(r",|;|\band\b", value) if n.strip()]
+    if not named:
+        return {"status": "fix", "message": "Which schools? Name each one, like University of Florida, Georgia Tech."}
+    if len(named) > MAX_SCHOOLS:
+        return {"status": "fix", "message": f"I can compare up to {MAX_SCHOOLS} schools. Remove {len(named) - MAX_SCHOOLS}."}
+
+    options: dict[str, dict] = {}
+    best: list[str] = []
+    for item in named:
+        guesses = [c for c in item.get("candidates") or [] if isinstance(c, str) and c.strip()][:MAX_GUESSES] or [item["typed"]]
+        schools = await asyncio.to_thread(_find_schools, guesses)
+        if not schools:
+            return {"status": "fix", "message": f"I couldn't find \"{item['typed']}\". Check the spelling or use the school's full name."}
+        for school in schools:
+            options.setdefault(str(school["school_id"]), _school_option(school))
+        comparable = [str(s["school_id"]) for s in schools if not options[str(s["school_id"])].get("disabled")]
+        if comparable and comparable[0] not in best:
+            best.append(comparable[0])
+    # The best guesses lead, so they're never cut by MAX_OPTIONS.
+    ordered = [options[v] for v in best] + [o for v, o in options.items() if v not in best]
+    for option in ordered:
+        option["preselect"] = option["value"] in best
+    return {"status": "ok", "set": {"school_candidates": json.dumps(ordered[:MAX_OPTIONS])}}
+
+
 def _describe_numbers(numbers: dict) -> str:
     labels = {
         "undergrad_tuition_per_year": "undergrad tuition {}/yr",
@@ -168,6 +274,7 @@ async def validate_salary(value: str, answers: dict) -> dict:
 VALIDATORS = {
     ("path1", "occupation"): validate_single_occupation,
     ("path1", "specific_numbers"): validate_user_numbers,
+    ("path2", "target_schools"): validate_target_schools,
     ("path4", "current_salary"): validate_salary,
 }
 

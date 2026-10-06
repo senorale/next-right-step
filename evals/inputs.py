@@ -19,6 +19,7 @@ from pathlib import Path
 
 import run  # noqa: F401  sets up the env (Gemini free tier) and imports the API
 from run import agent
+import smoke
 
 EVALS = Path(__file__).resolve().parent
 RESULTS = EVALS / "results"
@@ -29,7 +30,9 @@ FLOW_TEXT = (
 
 
 def chat_message(intake: dict) -> str:
-    """Same first message the chat page builds for path1 (buildPrompt in src/app/chat/page.tsx)."""
+    """Same first message the chat page builds (buildPrompt in src/app/chat/page.tsx)."""
+    if intake["path_type"] != "path1":
+        return smoke.chat_message(intake)
     lines = [
         "Decision point: College vs Vocational vs Working Now", "", "Here's my situation:",
         "- I'm deciding between college, a trade, or working right away",
@@ -57,8 +60,22 @@ def _numbers(value, skip_keys=("intake_answers",)) -> list[float]:
 def check(content: dict, fixed: list[dict] | None, data_blocks: list[dict], intake: dict, expect: dict) -> dict:
     results: dict[str, list[str]] = {}
 
-    code = agent._chosen_occupation_code(intake, data_blocks)
-    results["chosen_occupation"] = [] if code == expect["occupation_code"] else [f"got {code}, expected {expect['occupation_code']}"]
+    if "occupation_code" in expect:
+        code = agent._chosen_occupation_code(intake, data_blocks)
+        results["chosen_occupation"] = [] if code == expect["occupation_code"] else [f"got {code}, expected {expect['occupation_code']}"]
+
+    ids = [o["option_id"] for o in fixed or []]
+    if "option_ids" in expect:
+        # Rows the user named (e.g. their schools) must reach the report.
+        results["named_options"] = [f"missing {i}" for i in expect["option_ids"] if i not in ids]
+
+    if "school_states" in expect:
+        # Exploring by location: every school found is in a requested state, and there are enough to compare.
+        want = expect["school_states"]
+        schools = [o for o in fixed or [] if o["option_id"].startswith("school:")]
+        results["schools_in_location"] = [f"{o['name']} is in {o.get('state')}" for o in schools if o.get("state") not in want["states"]]
+        if len(schools) < want["min"]:
+            results["schools_in_location"].append(f"{len(schools)} schools, expected at least {want['min']}")
 
     if "rows" in expect:
         rows = {o["name"]: o for o in fixed or []}
