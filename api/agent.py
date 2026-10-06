@@ -23,15 +23,14 @@ load_dotenv(dotenv_path="../.env")
 
 import openai
 from db import (
-    get_tuition_medians,
-    run_sql,
     search_schools,
     get_school_programs,
     search_occupations,
 )
 from career_cost import path1_options
+from options import candidate_rows, pairwise_gaps, with_rows
 from user_numbers import extract_user_numbers
-from report import PATH1_REPORT_PROMPT, PATH1_REPORT_SCHEMA, REPORT_SPEC_SYSTEM_PROMPT, render_report
+from report import REPORT_PROMPT, render_report, report_schema
 
 logger = logging.getLogger(__name__)
 
@@ -122,15 +121,6 @@ def _retry_delay_for(exc: Exception) -> float:
 
 TOOLS = [
     {
-        "name": "get_tuition_medians",
-        "description": "Get national median annual tuition costs by school type (public in-state, public out-of-state, private nonprofit). Includes sticker price, net price after aid, and full cost of attendance. Use this for general cost comparisons when no specific school is named.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
         "name": "search_schools",
         "description": "Search colleges by name, state, or both. Returns up to 5 matches (graduation rate >= 70%) with tuition, net price by income, graduation rate, median debt, earnings, admission rate, retention rate, and loan repayment. Defaults to bachelor's-degree-granting schools. Use filter and sort params based on user's intake preferences.",
         "input_schema": {
@@ -205,37 +195,17 @@ TOOLS = [
         },
     },
     {
-        "name": "run_sql",
-        "description": """Run a read-only SQL SELECT query against the database. Only SELECT statements are allowed. Results are capped at 50 rows.
-
-Database schema (PostgreSQL, all table/column names are double-quoted):
-
-"OccupationCategory" (id UUID PK, name TEXT UNIQUE, occupation_code TEXT UNIQUE, created_at, updated_at)
-  Sample: id='def-456', name='Computer and Mathematical Occupations', occupation_code='15-0000'
-
-"OccupationSubCategory" (id UUID PK, name TEXT, occupation_code TEXT, annual_salary FLOAT, category_id UUID FK->OccupationCategory.id, typical_years_of_school FLOAT NULL, created_at, updated_at)
-  Sample: id='ghi-789', name='Software Developers', occupation_code='15-1252', annual_salary=132270.0, typical_years_of_school=4.0
-
-"CipCode" (id UUID PK, code TEXT UNIQUE, title TEXT, created_at, updated_at)
-  Degree fields. code is a 4-digit CIP code with no dot. Sample: code='1107', title='Computer Science.'
-
-"CipOccupation" (id UUID PK, cip_id UUID FK->CipCode.id, occupation_id UUID FK->OccupationSubCategory.id)
-  Links degree fields to occupations (CIP-SOC crosswalk).
-
-"ProgramDebt" (id UUID PK, cip_id UUID FK->CipCode.id, credential_level INT, credential_label TEXT, school_type TEXT, median_debt INT, mean_debt INT NULL, sample_size INT, source TEXT, created_at, updated_at)
-  National median debt by degree field. credential_level: 1=Undergrad Cert, 2=Associate, 3=Bachelor, 5=Master, 6=Doctoral, 7=First Professional, 8=Grad/Prof Cert. school_type: public | private_nonprofit | all
-
-"TuitionMedian" (id UUID PK, cohort TEXT UNIQUE, label TEXT, sticker_annual INT NULL, net_price_annual INT NULL, cost_of_attendance_annual INT NULL, sample_size INT, source TEXT, created_at, updated_at)
-  Cohorts: public_in_state, public_out_of_state, private_nonprofit, all""",
+        "name": "compare_education_paths",
+        "description": "Compare working now against school for one occupation. Returns rows for a high school diploma, cashier, electrician, the national bachelor's median, and the given occupation: years of school, median student debt, median salary, and precomputed gaps vs a bachelor's. Adds a row with the user's own tuition and salary when they gave any. All figures are computed; use them as given. Requires an occupation_code (SOC) from search_occupations or intake.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {
+                "occupation_code": {
                     "type": "string",
-                    "description": "A SQL SELECT query to run against the database",
+                    "description": "SOC code of the occupation to compare (e.g. '23-1011')",
                 }
             },
-            "required": ["query"],
+            "required": ["occupation_code"],
         },
     },
 ]
@@ -250,56 +220,46 @@ _TOOL_PROGRESS = {
     "search_occupations": "Searching occupations…",
     "search_schools": "Looking up schools…",
     "get_school_programs": "Pulling program earnings…",
-    "get_tuition_medians": "Getting tuition data…",
-    "run_sql": "Querying database…",
+    "compare_education_paths": "Comparing education paths…",
 }
 
 TOOL_DISPATCH = {
     "search_occupations": lambda args: search_occupations(args["keyword"]),
-    "get_tuition_medians": lambda _args: get_tuition_medians(),
     "search_schools": lambda args: search_schools(
         args.get("name"), args.get("state"), args.get("ownership"),
         args.get("max_net_price"), args.get("size"), args.get("sort_by"),
         args.get("degree_type", "bachelor"),
     ),
     "get_school_programs": lambda args: get_school_programs(args["school_id"], args.get("program_search")),
-    "run_sql": lambda args: run_sql(args["query"]),
 }
 
-SYSTEM_PROMPT = """You are the data-gathering agent for the "Next Right Step" college and career advisor app. Call tools to collect the data for the user's situation; a separate step writes the report.
 
-The user's intake_answers include a "path_type". Gather data for their path:
+def _compare_education_paths(occupation_code: str, user_numbers: dict) -> dict:
+    options = path1_options(occupation_code, user_numbers)
+    if len(options) < 5:
+        return {"error": f"No salary or education data for occupation_code {occupation_code!r}"}
+    return {"occupation_code": occupation_code, "options": options}
 
-path1 - COLLEGE VS VOCATIONAL VS WORKING NOW:
-- search_occupations for the user's chosen occupation. Code looks up the other rows (high school, cashier, electrician, bachelor's).
 
-path2 - COMPARING SCHOOLS:
-- search_schools for each named school, or by state if exploring by location
-- Use their compare_metrics and rank_by preferences as sort_by
-- get_tuition_medians for a national baseline
+def _dispatch_for(user_numbers: dict) -> dict:
+    """Tool functions for one run. Each result carries its option rows
+    (options.py). compare_education_paths takes the user's numbers from intake,
+    not from the model, so the model never copies them."""
+    tools = {
+        **TOOL_DISPATCH,
+        "compare_education_paths": lambda args: _compare_education_paths(args["occupation_code"], user_numbers),
+    }
+    return {name: (lambda args, name=name, func=func: with_rows(name, args, func(args))) for name, func in tools.items()}
 
-path3 - COMPARING PROGRAMS AT A SCHOOL:
-- search_schools for their school (to get school_id)
-- get_school_programs for that school, filtered by each program they named
-- search_occupations for occupations linked to those programs
 
-path4 - COMPARE CAREER TRACKS (starting point: current_position, education_level, current_field, current_role):
-- search_occupations for each career they named
-- If they gave a current job: search_occupations for it. If they asked to compare only these careers to each other, don't.
-- get_tuition_medians for a cost baseline
-- search_occupations for related occupations in each field
+SYSTEM_PROMPT = """You gather data for a college and career report; a separate step writes it. Tool results include "options": rows the report can compare. Gather the ones this person's question needs. Call independent tools together; if a search finds nothing, try other keywords. When done, reply with one short sentence.
 
-path5 - PATH TO A SPECIFIC CAREER (same starting point fields as path4):
-- search_occupations for the target occupation
-- If working: search_occupations for their current role
-- get_tuition_medians if a degree is needed
-- search_schools by state or relevant programs if a degree is required
-
-RULES:
-- Call all relevant tools in the first turn.
-- If search_occupations returns no results, try broader or alternative keywords.
-
-When done, reply with one plain sentence saying what data you found. No numbers, no markdown.
+Questions by intake path_type:
+- path1: college vs a trade vs working now, for their occupation (use occupation_code from intake when present).
+- path2: how the schools they named, or schools in their location, compare.
+- path3: how the programs they named at their school compare, and the occupations they lead to.
+- path4: how the careers they named compare, with their current job unless compare_to_current is "no".
+- path5: how to get from their current role to their target career.
 """
 
 
@@ -323,82 +283,43 @@ def _parse_json_response(text: str) -> dict | None:
 
 
 def _chosen_occupation_code(intake_answers: dict, data_blocks: list[dict]) -> str | None:
-    """The occupation the user named on path1: the one they confirmed at intake
-    (occupation_code), else the top search_occupations result with a salary."""
-    if intake_answers.get("occupation_code"):
-        return intake_answers["occupation_code"]
-    keyword = (intake_answers.get("occupation") or "").strip().lower()
-    searches = [b["data"] for b in data_blocks if b.get("type") == "search_occupations" and isinstance(b.get("data"), dict)]
-    matching = [d for d in searches if (d.get("keyword") or "").strip().lower() == keyword] or [
-        d for d in searches if (d.get("keyword") or "").strip().lower() not in ("electrician", "cashier")
-    ]
-    for data in matching:
-        for result in data.get("results", []):
-            if result.get("annual_salary"):
-                return result.get("soc_code")
+    """The occupation the agent compared on path1 (evals/inputs.py checks it)."""
+    for block in reversed(data_blocks):
+        if block.get("type") == "compare_education_paths" and isinstance(block.get("data"), dict):
+            return block["data"].get("occupation_code")
     return None
-
-
-def _is_path1(intake_answers: dict | None) -> bool:
-    return bool(intake_answers) and intake_answers.get("path_type") == "path1"
-
-
-def path1_data_blocks(intake_answers: dict) -> list[dict]:
-    """Path1 only needs the user's chosen occupation (code looks up the other
-    rows), so code gathers it without a model call."""
-    keyword = (intake_answers.get("occupation") or "").strip()
-    result = search_occupations(keyword) if keyword else {}
-    return [{"type": "search_occupations", "data": result}] if result.get("results") else []
-
-
-def _fixed_options(intake_answers: dict, data_blocks: list[dict], user_numbers: dict) -> list[dict] | None:
-    """Path1 gets the same five options as the College vs alternatives page,
-    built in code, plus a row with the user's own numbers when they gave any;
-    the LLM only writes the text around them."""
-    if not _is_path1(intake_answers):
-        return None
-    try:
-        return path1_options(_chosen_occupation_code(intake_answers, data_blocks), user_numbers)
-    except Exception:
-        logger.exception("Building path1 options failed; falling back to LLM-built options")
-        return None
 
 
 def _progress(message: str, stage: str, percent: float, **extra) -> dict:
     return {"event": "progress", "message": message, "stage": stage, "percent": round(percent), **extra}
 
 
-def build_report_input(
-    intake_answers: dict, data_blocks: list[dict], agent_text: str, user_numbers: dict | None = None
-) -> tuple[dict, list[dict] | None]:
-    """Everything the report model receives, plus the code-built options (path1)
-    that code renders on its own."""
-    fixed_options = _fixed_options(intake_answers, data_blocks, user_numbers or {})
-    content = {
-        "intake_answers": intake_answers,
-        "agent_summary": agent_text,
-        "tool_results": data_blocks,
-    }
-    if user_numbers:
-        content["user_numbers"] = user_numbers
-    if fixed_options:
-        content["path1_options"] = fixed_options
-    return content, fixed_options
+def build_report_input(intake_answers: dict, data_blocks: list[dict]) -> tuple[dict, list[dict]]:
+    """Everything the report model receives: the intake answers, every option
+    row gathered, and the gaps between them. Raw tool results stay out, so the
+    only numbers the model sees are the ones code renders."""
+    rows = candidate_rows(intake_answers, data_blocks)
+    content = {"intake_answers": intake_answers, "rows": rows, "gaps": pairwise_gaps(rows)}
+    return content, rows
 
 
-async def prepare_report_input(intake_answers: dict, data_blocks: list[dict], agent_text: str) -> tuple[dict, list[dict] | None]:
-    """Pulls any numbers the user typed (path1 "specific") into structured
-    fields, then builds the report input. evals/inputs.py checks this directly."""
-    user_numbers = {}
-    if _is_path1(intake_answers) and intake_answers.get("data_source") == "specific":
-        try:
-            # Confirmed by the user at intake; extract again only if missing.
-            user_numbers = json.loads(intake_answers.get("user_numbers") or "{}")
-        except json.JSONDecodeError:
-            user_numbers = {}
-        if not user_numbers:
-            user_numbers = await extract_user_numbers(client, MODEL, intake_answers.get("specific_numbers") or "") or {}
-    return await asyncio.to_thread(build_report_input, intake_answers, data_blocks, agent_text, user_numbers)
+async def resolve_user_numbers(intake_answers: dict | None) -> dict:
+    """Numbers the user typed (path1 "specific") as structured fields."""
+    if not intake_answers or intake_answers.get("data_source") != "specific":
+        return {}
+    try:
+        # Confirmed by the user at intake; extract again only if missing.
+        user_numbers = json.loads(intake_answers.get("user_numbers") or "{}")
+    except json.JSONDecodeError:
+        user_numbers = {}
+    if not user_numbers:
+        user_numbers = await extract_user_numbers(client, MODEL, intake_answers.get("specific_numbers") or "") or {}
+    return user_numbers
+
+
+async def prepare_report_input(intake_answers: dict, data_blocks: list[dict], agent_text: str = "") -> tuple[dict, list[dict]]:
+    """Builds the report input. evals/inputs.py checks this directly."""
+    return await asyncio.to_thread(build_report_input, intake_answers, data_blocks)
 
 
 async def generate_report_stream(
@@ -412,24 +333,12 @@ async def generate_report_stream(
         "generate_report: %d data_blocks, intake_keys=%s",
         len(data_blocks), list(intake_answers.keys()),
     )
-    content, fixed_options = await prepare_report_input(intake_answers, data_blocks, agent_text)
-    async for event in write_report(content, fixed_options, agent_text):
+    content, _rows = await prepare_report_input(intake_answers, data_blocks, agent_text)
+    async for event in write_report(content, agent_text):
         yield event
 
 
-def _report_prompt(content: dict, fixed_options: list[dict] | None) -> tuple[str, dict]:
-    """System prompt and request settings. Path1 with code-built options has its own
-    prompt, an enforced schema, and temperature 0 (its numbers come from code, so
-    variety only adds risk, e.g. garbled figures); other paths share the original prompt."""
-    if fixed_options and (content.get("intake_answers") or {}).get("path_type") == "path1":
-        return PATH1_REPORT_PROMPT, {
-            "response_format": {"type": "json_schema", "json_schema": {"name": "path1_report", "schema": PATH1_REPORT_SCHEMA}},
-            "temperature": 0,
-        }
-    return REPORT_SPEC_SYSTEM_PROMPT, {"response_format": {"type": "json_object"}}
-
-
-async def write_report(content: dict, fixed_options: list[dict] | None, agent_text: str):
+async def write_report(content: dict, agent_text: str):
     """Report generation alone: writes and renders the report from a prepared
     input (prepare_report_input). evals/report_eval.py calls this with fixed inputs."""
     user_content = json.dumps(content, default=_json_default)
@@ -440,15 +349,17 @@ async def write_report(content: dict, fixed_options: list[dict] | None, agent_te
     last_percent = GATHERING_END
     parts: list[str] = []
     usage, finish_reason = None, None
-    system_prompt, settings = _report_prompt(content, fixed_options)
+    rows = content["rows"]
     stream = await client.chat.completions.create(
         model=REPORT_MODEL,
         max_tokens=REPORT_SPEC_MAX_TOKENS,
         messages=[
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": REPORT_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        **settings,
+        # Numbers come from code, so variety only adds risk (e.g. garbled figures).
+        temperature=0,
+        response_format={"type": "json_schema", "json_schema": {"name": "report", "schema": report_schema(rows)}},
         stream=True,
         stream_options={"include_usage": True},
     )
@@ -483,9 +394,9 @@ async def write_report(content: dict, fixed_options: list[dict] | None, agent_te
         return
 
     yield _progress("Finalizing your report…", "rendering", RENDERING_PERCENT)
-    # The chat reply: the report's summary, or its headline when there is none (path1).
-    reply = parsed.get("summary") or parsed.get("headline") or agent_text
-    parsed = {"summary": reply, "html": render_report(parsed, fixed_options)}
+    # The headline doubles as the chat reply.
+    reply = parsed.get("headline") or agent_text
+    parsed = {"summary": reply, "html": render_report(parsed, rows)}
 
     logger.info("Report parsed OK: summary=%d chars, html=%d chars", len(parsed.get("summary", "")), len(parsed.get("html", "")))
     yield {"event": "report", "report": parsed}
@@ -566,21 +477,9 @@ async def run_agent_stream(
 
     text_response: str | None = None
     agent_calls = 0
-    if not conversation_history and _is_path1(intake_answers):
-        # First path1 message: what to gather is fixed, so code does it and
-        # the agent loop below is skipped. Follow-up questions use the agent.
-        yield gathering("Searching occupations…")
-        t0 = time.perf_counter()
-        data_blocks = await asyncio.to_thread(path1_data_blocks, intake_answers)
-        tools_total += time.perf_counter() - t0
-        text_response = (
-            f"I pulled salary, education, and debt data for {intake_answers.get('occupation')}, plus cashiers, "
-            "electricians, and national high school and bachelor's degree medians"
-            + (", and used the numbers you shared." if intake_answers.get("data_source") == "specific" else ".")
-        )
-        messages.append({"role": "assistant", "content": text_response})
+    dispatch = _dispatch_for(await resolve_user_numbers(intake_answers))
 
-    for iteration in range(MAX_TOOL_ITERATIONS if text_response is None else 0):
+    for iteration in range(MAX_TOOL_ITERATIONS):
         agent_calls = iteration + 1
         try:
             yield gathering("Understanding your question…" if iteration == 0 else "Reviewing what I found…")
@@ -612,7 +511,7 @@ async def run_agent_stream(
                 progress_message = _TOOL_PROGRESS.get(tool_name, f"Running {tool_name}…")
                 yield gathering(progress_message)
 
-                func = TOOL_DISPATCH.get(tool_name)
+                func = dispatch.get(tool_name)
                 if not func:
                     messages.append({"role": "tool", "tool_call_id": tool_id, "content": f"Error: unknown tool '{tool_name}'"})
                     continue

@@ -648,7 +648,7 @@ def get_school_programs(school_id: int, program_search: str | None = None) -> di
         school = conn.execute(text('SELECT name FROM "School" WHERE school_id = :id'), {"id": school_id}).first()
         rows = conn.execute(
             text(f"""
-                SELECT p.cip_code, p.title, p.credential_level, p.earnings_1yr, p.earnings_4yr
+                SELECT p.cip_code, p.title, p.credential_level, p.earnings_1yr, p.earnings_4yr, p.median_debt
                 FROM "SchoolProgram" p
                 WHERE p.school_id = :id
                   AND (p.earnings_1yr IS NOT NULL OR p.earnings_4yr IS NOT NULL)
@@ -663,8 +663,10 @@ def get_school_programs(school_id: int, program_search: str | None = None) -> di
                 "cip_code": r.cip_code,
                 "title": r.title,
                 "credential": _CREDENTIAL_LEVELS.get(r.credential_level, f"Level {r.credential_level}"),
+                "credential_level": r.credential_level,
                 "earnings_1yr_after_graduation": r.earnings_1yr,
                 "earnings_4yr_after_graduation": r.earnings_4yr,
+                "median_debt": r.median_debt,
             }
             for r in rows
         ]

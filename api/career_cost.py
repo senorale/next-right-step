@@ -130,8 +130,10 @@ def career_cost(occupation_code: str) -> dict | None:
     }
 
 
-def _career_option(cost: dict) -> dict:
+def career_option(cost: dict) -> dict:
+    """An occupation as an option row (see options.py)."""
     return {
+        "option_id": f"occ:{cost['occupation_code']}",
         "name": cost["name"],
         "short_label": cost["name"],
         "education": (cost["credential"] or "No degree required").capitalize(),
@@ -178,6 +180,7 @@ def _user_option(median: dict, numbers: dict, bachelors_debt: int) -> dict | Non
     salary = numbers.get("expected_salary")
     return {
         **median,
+        "option_id": f"{median['option_id']}:yours",
         "name": f"{median['name']} (your numbers)",
         "short_label": f"{median['short_label']} (yours)",
         "debt": round(cost),
@@ -185,6 +188,7 @@ def _user_option(median: dict, numbers: dict, bachelors_debt: int) -> dict | Non
         "expected_salary": salary if salary is not None else median["expected_salary"],
         "salary_basis": "Your expected salary" if salary is not None else median["salary_basis"],
         "user_numbers": True,
+        "your_inputs": dict(numbers),
     }
 
 
@@ -192,6 +196,7 @@ def path1_options(occupation_code: str | None, user_numbers: dict | None = None)
     """The five path1 rows, same as the College vs alternatives page, plus a
     sixth with the user's own numbers for their chosen occupation when given."""
     options = [{
+        "option_id": "baseline:hs",
         "name": "High school diploma",
         "short_label": "HS diploma",
         "education": "High school diploma",
@@ -204,8 +209,9 @@ def path1_options(occupation_code: str | None, user_numbers: dict | None = None)
     for code in (CASHIER_CODE, ELECTRICIAN_CODE):
         cost = career_cost(code)
         if cost:
-            options.append(_career_option(cost))
+            options.append(career_option(cost))
     bachelors = {
+        "option_id": "baseline:bachelors",
         "name": "Bachelor's degree (median)",
         "short_label": "Bachelor's",
         "education": "Bachelor's degree",
@@ -218,7 +224,7 @@ def path1_options(occupation_code: str | None, user_numbers: dict | None = None)
     options.append(bachelors)
     chosen = career_cost(occupation_code) if occupation_code else None
     if chosen:
-        option = _career_option(chosen)
+        option = career_option(chosen)
         mine = _user_option(option, user_numbers or {}, bachelors["debt"])
         # Stated outright so the report never computes a number itself.
         option["graduate_school_required"] = chosen["years_in_school"] > BACHELOR_YEARS

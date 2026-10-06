@@ -1,10 +1,11 @@
 """
 Template-based report rendering.
 
-The LLM returns a compact JSON "report spec" (headline, narrative text, and the
-numbers to show). Python does the financial math and renders the HTML/SVG from
-fixed templates. This keeps the LLM output small, which is what makes the
-report fast: generation time scales with output tokens.
+The LLM returns a compact JSON "report spec": the headline, the text, and which
+option rows (options.py) to compare. Python does the financial math and renders
+the HTML/SVG from fixed templates and the rows' own numbers. This keeps the LLM
+output small, which is what makes the report fast: generation time scales with
+output tokens.
 """
 
 import html
@@ -32,95 +33,77 @@ DISCLAIMER = (
     "AI analysis may contain errors; verify figures before making decisions. Generated {today}."
 )
 
-REPORT_SPEC_SYSTEM_PROMPT = """You write the content for a personalized college and career report. You receive raw data from tool calls and the user's intake profile. The page layout, CSS, charts, and financial math are handled by code. You only return JSON content. Keep it compact: no HTML, no markdown.
+REPORT_PROMPT = """You write the text of a college and career report. Input: the user's intake answers (path_type says their question), option rows built by code, and the gaps between every pair of rows. Code renders the charts, the financial table with payoff timelines, and source notes; you pick the rows and write the words.
 
-RESPOND WITH ONLY VALID JSON matching this shape:
-{
-  "summary": "1-2 sentence plain text takeaway for chat",
-  "headline": "bold 1-2 sentence personalized takeaway",
-  "baseline_salary": 46748,
-  "baseline_label": "High school diploma",
-  "options": [
-    {"name": "Electrician", "short_label": "Electrician", "education": "4-5 yr apprenticeship", "years_in_school": 0, "annual_cost": 0, "expected_salary": 61590, "note": "Bright outlook"}
-  ],
-  "sections": [
-    {
-      "title": "Section heading",
-      "what_it_means": "One 'What this means for you' sentence: a concrete takeaway for this user, not a description of the section.",
-      "bullets": ["optional short point"],
-      "table": {"columns": ["School", "Net price"], "rows": [["UF", "$9,400"]]},
-      "chart": {"title": "Median salary", "x_label": "Annual Salary ($)", "y_label": "Occupation", "unit": "usd", "bars": [{"label": "Electrician", "value": 61590}]}
-    }
-  ],
-  "limitations": ["short honest caveat"]
-}
+- option_ids: the rows that answer their question, in display order.
+- headline: the main takeaway in 1-2 sentences; it is also the chat reply. Never describe the report.
+- sections: 2-3, most important first. The reader already sees every row in the table, so each bullet compares two or more options ("Lawyers earn $68,124 more in median salary than bachelor's holders"); never one bullet per option restating its numbers. what_it_means: one concrete takeaway. table_metrics: row metrics worth a table here; only the ones the user chose, if they chose any.
+- limitations: 1-2 caveats specific to this comparison.
 
-FIELD RULES:
-- options: one entry per path being compared (career, school, or program). Code computes education cost (annual_cost x years_in_school), opportunity cost, total investment, monthly loan payment (6.53% over 20 years), and payoff timeline, and renders the financial table and payoff chart. Do not compute these yourself.
-  * years_in_school: years of full-time school still required (0 for no school). annual_cost: annual net price or tuition in dollars (0 if none).
-  * expected_salary: annual salary in dollars from the tool data.
-  * Include the baseline as an option only when the path format asks for it as a row (it will show zero cost).
-- baseline_salary: 46748 (HS diploma) unless the user gave a current salary; then use it. baseline_label names it.
-- sections: 2-4 sections ordered by importance to this user. table, chart, and bullets are each optional; include only what adds value. Do not repeat the financial breakdown. Short chart labels (e.g. "CO Mines"). chart unit is one of: usd, percent, years, number.
-- Table cells are short display strings, already formatted.
-- Never use the words "major" or "break-even". Say "degree" or "program", and "payoff timeline".
-- Salaries, debt, and costs are medians: say "median", never "average". Salaries span all experience levels, so never "starting" or "entry-level".
-- Use only figures from the tool data or path1_options. If a figure isn't there, don't estimate it; say it in words.
-- Don't assume the user's past school counts toward a new career; how much transfers depends on the field and program.
-- For income-based net price data, highlight the bracket closest to the user's situation if known.
+Numbers:
+- Use only numbers from the rows and gaps, copied exactly; never compute one. Each gap names the option with the higher salary, debt, or years. Write dollars as $61,690.
+- Write for the user: never say "row", "gap", or field names. National figures are medians: say "median salary", "median debt". Rows marked user_numbers hold the user's own figures: say "your".
+- Occupation salaries are BLS medians for the whole occupation; school and program salaries are College Scorecard earnings of its graduates.
+- Years of school are typical: say "typically".
 
-PATH-SPECIFIC CONTENT (intake "path_type"):
-path1 (college vs vocational vs work): when path1_options is given, it is the five options, built by code: years of school, median student debt, and median salary for each. Code renders the charts and financial breakdown, so return "options": [] and no charts or tables. Write two sections from those numbers, never changing or recomputing them: how the options compare on median salary and years of school, and what each education path costs in median debt and time out of work. The main thing to catch: when the chosen occupation's graduate_school_required is true (e.g. law, medicine), lead the headline with it and state its years_beyond_bachelors as years beyond a bachelor's, plus the added debt and extra years out of work; when it is false, say no graduate school is required. When a row has user_numbers true, it is the chosen occupation with the user's own tuition or expected salary (cost_basis says which); compare it with the national median row and say which figures are theirs. Without path1_options, options are exactly five rows: HS diploma baseline (zero cost, baseline salary), Cashier, Electrician, Bachelor's degree median (expected_salary 77636, the BLS median for bachelor's degree holders), user's chosen occupation.
-path2 (comparing schools): options are the top 5 schools ranked by the user's chosen metric. A section table shows ONLY the metrics the user toggled in compare_metrics.
-path3 (comparing programs at school): options are the programs. A section compares school-specific earnings (College Scorecard) with national occupation salary (BLS), labeling sources, plus bright outlook status from O*NET.
-path4 (compare career tracks): options are the careers. Use current_position, education_level, current_field, and current_role for context (gap from current role), with years_in_school from each career's typical years of school. If compare_to_current is "no", options are only the named careers (no current-job row) and the baseline is current_salary_value as "Your current salary" when given, else the high school median.
-path5 (path to career): options are the realistic routes to the target. One section is a roadmap: bullets as ordered steps with timeline, plus the education the target requires.
+Per path:
+- path1: college vs a trade vs working now. Show every row compare_education_paths returned. The headline states figures: with a user_numbers row, the user's salary and debt against the national median; otherwise whether the chosen occupation needs graduate school, its total years of school, median salary, and median debt, and, if it does, its years beyond a bachelor's and its salary and debt gaps against the bachelor's row.
+- path2: compare the schools on the metrics they chose, ranked by rank_by.
+- path3: compare the programs: school earnings against national pay for the occupations they lead to.
+- path4: compare the careers, and their current job unless compare_to_current is "no". Past school may not count toward a new career.
+- path5: a roadmap from their current role to the target: ordered steps with the typical time for each.
 """
 
-
-# Shape the path1 report model must return; the API enforces it (structured output).
 _TEXT = {"type": "string"}
-PATH1_REPORT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "headline": _TEXT,
-        "sections": {"type": "array", "items": {
-            "type": "object",
-            "properties": {"title": _TEXT, "bullets": {"type": "array", "items": _TEXT}, "what_it_means": _TEXT},
-            "required": ["title", "bullets", "what_it_means"],
-            "additionalProperties": False,
-        }},
-        "limitations": {"type": "array", "items": _TEXT},
-    },
-    "required": ["headline", "sections", "limitations"],
-    "additionalProperties": False,
+
+
+def report_schema(rows: list[dict]) -> dict:
+    """The shape the report model must return; the API enforces it. option ids
+    and metric keys are limited to the rows the model was given."""
+    ids = {"type": "string", "enum": [r["option_id"] for r in rows]}
+    metrics = sorted({k for r in rows for k in (r.get("metrics") or {}) if k in METRIC_FORMATS})
+    metric = {"type": "string", "enum": metrics} if metrics else _TEXT
+    return {
+        "type": "object",
+        "properties": {
+            "headline": _TEXT,
+            "option_ids": {"type": "array", "items": ids},
+            "sections": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "title": _TEXT,
+                    "bullets": {"type": "array", "items": _TEXT},
+                    "what_it_means": _TEXT,
+                    "table_metrics": {"type": "array", "items": metric},
+                },
+                "required": ["title", "bullets", "what_it_means", "table_metrics"],
+                "additionalProperties": False,
+            }},
+            "limitations": {"type": "array", "items": _TEXT},
+        },
+        "required": ["headline", "option_ids", "sections", "limitations"],
+        "additionalProperties": False,
+    }
+
+
+# Row metrics the report can show as a table: key -> (column label, unit).
+METRIC_FORMATS = {
+    "avg_net_price": ("Net price per year", "usd"),
+    "tuition_in_state": ("In-state tuition", "usd"),
+    "tuition_out_of_state": ("Out-of-state tuition", "usd"),
+    "graduation_rate": ("Graduation rate", "percent"),
+    "admission_rate": ("Admission rate", "percent"),
+    "retention_rate": ("Retention rate", "percent"),
+    "loan_repayment_rate_3yr": ("Loan repayment (3 yr)", "percent"),
+    "median_debt": ("Median debt", "usd"),
+    "earnings_6yr_after_entry": ("Earnings 6 yrs after entry", "usd"),
+    "earnings_10yr_after_entry": ("Earnings 10 yrs after entry", "usd"),
+    "earnings_1yr_after_graduation": ("Earnings 1 yr after graduating", "usd"),
+    "earnings_4yr_after_graduation": ("Earnings 4 yrs after graduating", "usd"),
+    "student_size": ("Students", "number"),
+    "bright_outlook": ("Bright outlook (O*NET)", "bool"),
 }
 
-# Path1 only (college vs trade vs working now). The prompt above still serves
-# paths 2-5; each path gets its own prompt as it's reworked, and shared rules
-# get pulled out once every path's evals pass.
-PATH1_REPORT_PROMPT = """You write the text of a report for someone deciding between college, a trade, or working right away. Code has already built the five options in path1_options (years of school, median student debt, median salary; rows marked user_numbers use the user's own tuition or salary) and renders the salary chart, the financial breakdown with payoff timelines, and notes on sources and assumptions. Your text explains what those numbers mean; the reader sees the chart and table next to it.
-
-Return only JSON:
-{"headline": "...", "sections": [{"title": "...", "bullets": ["..."], "what_it_means": "..."}], "limitations": ["..."]}
-
-- headline: 1-2 sentences, also shown as the chat reply, so it must stand on its own. State the main takeaway itself; never describe the report or the comparison ("This report...", "Comparing...").
-  * a user_numbers row exists: lead with the user's expected salary and total cost against the national median, using its gaps. E.g. "With your numbers, becoming a teacher means $60,000 in total cost, $35,000 more than the national median debt, for an expected salary of $50,000, $12,000 below the national median."
-  * otherwise, graduate_school_required true: lead with years_beyond_bachelors as years beyond a bachelor's and the total years of school, then what those years buy (median salary) and cost (median debt). E.g. "Becoming a school counselor typically takes 2 years beyond a bachelor's (6 in total) and $30,000 more in median debt, for $8,000 more in median salary."
-  * otherwise, graduate_school_required false: say no graduate school is required, then the years of school, median salary, and median debt. E.g. "Teachers need no graduate school: typically 4 years of school and about $25,000 in median debt for a median salary of about $62,000."
-- sections: two. (1) Pay and years of school. (2) Cost: median debt and years out of work. The reader already sees every row in the table, so bullets compare options instead of restating them, using the supplied gaps, e.g. "School counselors earn $8,000 more in median salary than bachelor's holders, but typically need 2 more years of school and $30,000 more in median debt." what_it_means: one concrete takeaway for this person.
-- limitations: 1-2 caveats specific to this comparison. The report already says figures are medians and how payoff is counted; don't repeat that.
-
-Rules:
-- Use only numbers from path1_options; never compute one. For differences use the supplied gaps: salary_gap_vs_bachelors and debt_gap_vs_bachelors on the chosen occupation, salary_gap_vs_median and debt_gap_vs_median on a user_numbers row (negative means less). Use each figure once.
-- Each row's debt is its total. A graduate row's debt already includes a bachelor's; its extra debt is debt_gap_vs_bachelors.
-- Put "median" with every national salary or debt figure. The user's own figures (rows marked user_numbers, and their gaps) say "your" instead, never "median". National figures describe occupations, never the user's own pay.
-- Write dollar amounts with commas and no decimals ($61,690).
-- Years of school are typical, not guaranteed: say "typically" (e.g. "typically 6 years of school").
-- The payoff timeline already counts debt, loan interest, and earnings given up while in school; don't describe what it includes or leaves out.
-- For user_numbers rows, say which figures are the user's and compare them with the national median row. When there is one, the headline leads with that comparison (e.g. their expected salary and total cost against the national median).
-- Say "degree" or "program", never "major"; "payoff timeline", never "break-even".
-"""
 
 def _esc(value) -> str:
     return html.escape(str(value), quote=True)
@@ -156,18 +139,13 @@ def monthly_payment(principal: float, rate: float = LOAN_RATE, years: int = REPA
 
 
 def compute_financials(option: dict, baseline_salary: float) -> dict:
-    """Options built in code (path1) carry total "debt" and follow the web app's
-    math: total = debt + loan interest + earnings given up while in school.
-    LLM-built options carry annual_cost and leave interest out."""
+    """Follows the web app's math: total = debt + loan interest + earnings given
+    up while in school."""
     years = _num(option.get("years_in_school"))
     opportunity_cost = baseline_salary * years
-    if "debt" in option:
-        education_cost = _num(option.get("debt"))
-        interest = monthly_payment(education_cost) * REPAYMENT_YEARS * 12 - education_cost
-        total = education_cost + max(interest, 0) + opportunity_cost
-    else:
-        education_cost = _num(option.get("annual_cost")) * years
-        total = education_cost + opportunity_cost
+    education_cost = _num(option.get("debt"))
+    interest = monthly_payment(education_cost) * REPAYMENT_YEARS * 12 - education_cost
+    total = education_cost + max(interest, 0) + opportunity_cost
     salary = _num(option.get("expected_salary"))
     delta = salary - baseline_salary
     if total == 0:
@@ -279,7 +257,6 @@ def _financial_section(options: list[dict], baseline_salary: float, baseline_lab
         "Payoff timeline: years from the first day of school", "Years from starting school until the cost is recovered", "Option",
         payoff_bars, "years", "Computed from each option's cost and expected salary in the table above",
     )
-    debt_based = any("debt" in o for o in options)
     capped = [o.get("name", "") for o in options if _num(o.get("expected_salary")) >= BLS_SALARY_CAP]
     cap_note = (
         f'<p class="note">BLS reports wages above {_usd(BLS_SALARY_CAP)} as {_usd(BLS_SALARY_CAP)}, '
@@ -294,8 +271,7 @@ def _financial_section(options: list[dict], baseline_salary: float, baseline_lab
         '<section><h2>Financial breakdown</h2>'
         f'<p class="note">Baseline: {_esc(baseline_label)} at {_usd(baseline_salary)}/yr. '
         f'Loans at {LOAN_RATE * 100:.1f}% over {REPAYMENT_YEARS} years. '
-        + ("Education cost is median student debt (College Scorecard); total investment adds loan interest. "
-           if debt_based else "")
+        + "Education cost is median student debt (College Scorecard); total investment adds loan interest. "
         + 'Opportunity cost is baseline earnings given up while in school. '
         'Expected salaries are medians, not starting pay.'
         + (" Rows marked (your numbers) use the tuition and salary you gave instead, as listed below."
@@ -310,38 +286,57 @@ def _financial_section(options: list[dict], baseline_salary: float, baseline_lab
     )
 
 
+SALARY_SOURCES = {
+    "BLS median annual wage": "BLS OEWS May 2024 median annual wage (occupations)",
+    "BLS median weekly earnings x 52": "BLS median weekly earnings x 52 (high school diploma, bachelor's degree)",
+    "College Scorecard": "College Scorecard median earnings (schools and programs)",
+}
+
+
 def _salary_chart(options: list[dict]) -> str:
-    """Salary comparison for code-built options, labeled with its sources."""
+    """Salary comparison for the chosen rows, labeled with their sources."""
     # Only national figures belong in a chart titled median salary.
-    bars = [
-        {"label": o.get("short_label") or o.get("name", ""), "value": o.get("expected_salary")}
-        for o in options if not o.get("user_numbers")
+    shown = [o for o in options if not o.get("user_numbers") and o.get("expected_salary")]
+    if not shown:
+        return ""
+    bars = [{"label": o.get("short_label") or o.get("name", ""), "value": o["expected_salary"]} for o in shown]
+    sources = [
+        text for key, text in SALARY_SOURCES.items()
+        if any((o.get("salary_basis") or "").startswith(key) for o in shown)
     ]
     return (
         '<section><h2>Median salary by option</h2>'
-        + bar_chart(
-            "Median annual salary", "Median annual salary", "Option", bars, "usd",
-            "BLS OEWS May 2024 median annual wage (occupations); BLS median weekly earnings x 52 "
-            "(high school diploma, bachelor's degree)",
-        )
+        + bar_chart("Median annual salary", "Median annual salary", "Option", bars, "usd", "; ".join(sources))
         + "</section>"
     )
 
 
-def _section(sec: dict) -> str:
+def _metric(value, unit: str) -> str:
+    if value is None:
+        return "No data"
+    if unit == "bool":
+        return "Yes" if value else "No"
+    return _fmt(_num(value), unit)
+
+
+def _metric_table(keys: list, options: list[dict]) -> str:
+    keys = [k for k in keys if k in METRIC_FORMATS]
+    shown = [o for o in options if any(k in (o.get("metrics") or {}) for k in keys)]
+    if not keys or not shown:
+        return ""
+    return _table(
+        ["Option"] + [METRIC_FORMATS[k][0] for k in keys],
+        [[o.get("name", "")] + [_metric((o.get("metrics") or {}).get(k), METRIC_FORMATS[k][1]) for k in keys]
+         for o in shown],
+    )
+
+
+def _section(sec: dict, options: list[dict]) -> str:
     out = [f'<section><h2>{_esc(sec.get("title", ""))}</h2>']
     bullets = sec.get("bullets") or []
     if bullets:
         out.append("<ul>" + "".join(f"<li>{_esc(b)}</li>" for b in bullets) + "</ul>")
-    table = sec.get("table")
-    if isinstance(table, dict) and table.get("rows"):
-        out.append(_table(table.get("columns", []), table["rows"]))
-    chart = sec.get("chart")
-    if isinstance(chart, dict) and chart.get("bars"):
-        out.append(bar_chart(
-            chart.get("title", ""), chart.get("x_label", ""), chart.get("y_label", ""),
-            chart["bars"], chart.get("unit", "number"),
-        ))
+    out.append(_metric_table(sec.get("table_metrics") or [], options))
     if sec.get("what_it_means"):
         out.append(f'<p class="means"><strong>What this means for you:</strong> {_esc(sec["what_it_means"])}</p>')
     out.append("</section>")
@@ -384,14 +379,15 @@ SAVE_BUTTON = (
 )
 
 
-def render_report(spec: dict, fixed_options: list[dict] | None = None) -> str:
-    """fixed_options: options built in code (path1). They replace the LLM's
-    options and get a code-rendered salary chart."""
-    baseline_salary = _num(spec.get("baseline_salary"), HS_SALARY) or HS_SALARY
-    baseline_label = spec.get("baseline_label") or "High school diploma"
-    if fixed_options:
-        baseline_salary, baseline_label = HS_SALARY, "High school diploma"
-    options = fixed_options or [o for o in spec.get("options") or [] if isinstance(o, dict)]
+def render_report(spec: dict, rows: list[dict]) -> str:
+    """rows: every option row the model could pick (options.candidate_rows).
+    The report shows the ones it picked, in its order, with their own numbers."""
+    by_id = {r["option_id"]: r for r in rows}
+    options = [by_id[i] for i in dict.fromkeys(spec.get("option_ids") or []) if i in by_id]
+    # Payoff is measured against the user's current salary when they gave one.
+    baseline = by_id.get("baseline:current") or by_id.get("baseline:hs") or {}
+    baseline_salary = _num(baseline.get("expected_salary"), HS_SALARY) or HS_SALARY
+    baseline_label = baseline.get("name") or "High school diploma"
     sections = [s for s in spec.get("sections") or [] if isinstance(s, dict)]
     limitations = spec.get("limitations") or []
 
@@ -400,11 +396,8 @@ def render_report(spec: dict, fixed_options: list[dict] | None = None) -> str:
         "<h1>Your Next Right Step report</h1>",
         f'<p class="headline">{_esc(spec.get("headline", ""))}</p>',
     ]
-    if fixed_options:
-        # Code renders the path1 charts with sources; drop any the LLM added.
-        sections = [{k: v for k, v in sec.items() if k != "chart"} for sec in sections]
-        body.append(_salary_chart(fixed_options))
-    body.extend(_section(s) for s in sections)
+    body.append(_salary_chart(options))
+    body.extend(_section(s, options) for s in sections)
     body.append(_financial_section(options, baseline_salary, baseline_label))
     if limitations:
         body.append(

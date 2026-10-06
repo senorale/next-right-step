@@ -1,7 +1,6 @@
 """
 Report input eval: checks the data the report model receives, not the report
-it writes. Runs gathering for each case in input_cases.jsonl (code for path1
-on medians, the agent otherwise), captures build_report_input() instead of
+it writes. Runs the gathering agent for each case in input_cases.jsonl, captures build_report_input() instead of
 calling the report model, and compares it to the case's expectations.
 
     api/venv/bin/python evals/inputs.py
@@ -63,7 +62,7 @@ def check(content: dict, fixed: list[dict] | None, data_blocks: list[dict], inta
 
     if "rows" in expect:
         rows = {o["name"]: o for o in fixed or []}
-        problems = [] if fixed else ["no path1_options in the report input"]
+        problems = [] if fixed else ["no option rows in the report input"]
         for name, want in expect["rows"].items():
             got = rows.get(name)
             if not got:

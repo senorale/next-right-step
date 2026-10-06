@@ -45,12 +45,14 @@ def main() -> None:
     lines = []
     for case in CASES:
         intake = case["intake"]
-        data_blocks = agent.path1_data_blocks(intake)
-        content, fixed = agent.build_report_input(intake, data_blocks, "", case.get("user_numbers"))
-        if not fixed:
-            raise SystemExit(f"{case['id']}: no path1 options built")
+        # What the agent gets back when it calls compare_education_paths.
+        call = agent._dispatch_for(case.get("user_numbers") or {})["compare_education_paths"]
+        data_blocks = [{"type": "compare_education_paths", "data": call({"occupation_code": intake["occupation_code"]})}]
+        content, rows = agent.build_report_input(intake, data_blocks)
+        if "error" in data_blocks[0]["data"]:
+            raise SystemExit(f"{case['id']}: {data_blocks[0]['data']['error']}")
         lines.append(json.dumps({"id": case["id"], "report_input": content, "expect": case["expect"]}, default=str))
-        chosen = fixed[4:]
+        chosen = [r for r in rows if r["option_id"].startswith(f"occ:{intake['occupation_code']}")]
         print(case["id"], [(o["name"], o["years_in_school"], o["debt"], o["expected_salary"]) for o in chosen])
     (EVALS / "report_cases.jsonl").write_text("\n".join(lines) + "\n")
     print(f"wrote {len(lines)} cases")

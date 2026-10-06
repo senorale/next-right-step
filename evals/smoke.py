@@ -1,7 +1,8 @@
 """
 Smoke test: runs one made-up case per path (smoke_cases.jsonl) through the full
 chat pipeline and checks that it finishes, which tools ran, and that a report
-renders. It doesn't judge the report; that's the report-generation eval's job.
+renders, plus the report-number checks (checks.py): every figure in the text
+comes from the rows code rendered.
 
     api/venv/bin/python evals/smoke.py
     api/venv/bin/python evals/smoke.py --case path3-programs
@@ -17,6 +18,7 @@ import time
 from pathlib import Path
 
 import run  # noqa: F401  loads .env, puts api/ on the import path, collects warnings
+from checks import run_checks
 from run import WARNINGS, agent
 
 EVALS = Path(__file__).resolve().parent
@@ -84,6 +86,9 @@ async def run_case(case: dict) -> dict:
         problems.append(f"agent failed: {final['response'][:80]}")
     if final.get("report_status") != "success" or not final.get("report_html"):
         problems.append(f"report {final.get('report_status')}")
+    else:
+        checks = run_checks(final.get("response", ""), final["report_html"])
+        problems += [f"{name}: {c['hits']}" for name, c in checks.items() if not c["pass"]]
     return {"id": case["id"], "seconds": round(time.perf_counter() - start, 1), "tools": tools,
             "problems": problems, "warnings": list(WARNINGS.lines), "response": final.get("response", "")}
 
