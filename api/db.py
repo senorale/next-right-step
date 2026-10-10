@@ -67,23 +67,6 @@ def _fetch_typical_years(occupation_code: str) -> float | None:
         return None
 
 
-def _backfill_years(occupation_code: str) -> float | None:
-    """Fetch from O*NET and write to DB. Returns the value or None."""
-    years = _fetch_typical_years(occupation_code)
-    if years is None:
-        return None
-    with engine.begin() as conn:
-        conn.execute(
-            text("""
-                UPDATE "OccupationSubCategory"
-                SET typical_years_of_school = :years, updated_at = NOW()
-                WHERE occupation_code = :code
-            """),
-            {"years": years, "code": occupation_code},
-        )
-    return years
-
-
 MAX_SQL_ROWS = 50
 
 _SELECT_ONLY_RE = re.compile(
@@ -123,46 +106,6 @@ def run_sql(query: str) -> list[dict]:
     if len(results) > MAX_SQL_ROWS:
         return results[:MAX_SQL_ROWS]
     return results
-
-
-def find_degrees_with_occupations(query: str) -> list[dict]:
-    """Search degrees (CIP codes) by title and return each match with all linked occupations and salaries."""
-    with _connect_with_retry() as conn:
-        rows = conn.execute(
-            text("""
-                SELECT c.code AS cip_code,
-                       c.title AS degree,
-                       o.name AS occupation,
-                       o.occupation_code,
-                       o.annual_salary,
-                       o.typical_years_of_school
-                FROM "CipCode" c
-                JOIN "CipOccupation" co ON co.cip_id = c.id
-                JOIN "OccupationSubCategory" o ON o.id = co.occupation_id
-                WHERE c.title ILIKE :q
-                ORDER BY c.title, o.annual_salary DESC
-            """),
-            {"q": f"%{query}%"},
-        )
-        flat = [dict(r._mapping) for r in rows]
-
-    grouped: dict[str, dict] = {}
-    for row in flat:
-        cip_code = row["cip_code"]
-        if cip_code not in grouped:
-            grouped[cip_code] = {"cip_code": cip_code, "degree": row["degree"], "occupations": []}
-
-        years = row["typical_years_of_school"]
-        if years is None:
-            years = _backfill_years(row["occupation_code"])
-
-        grouped[cip_code]["occupations"].append({
-            "occupation": row["occupation"],
-            "annual_salary": float(row["annual_salary"]),
-            "typical_years_of_school": float(years) if years is not None else None,
-        })
-
-    return list(grouped.values())
 
 
 def get_tuition_medians() -> list[dict]:
