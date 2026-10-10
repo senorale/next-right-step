@@ -254,6 +254,8 @@ def _dispatch_for(user_numbers: dict) -> dict:
 
 SYSTEM_PROMPT = """You gather data for a college and career report; a separate step writes it. Tool results include "options": rows the report can compare. Gather the ones this person's question needs. Call independent tools together; if a search finds nothing, try other keywords. When done, reply with one short sentence.
 
+The user confirmed the occupations (with SOC codes), schools (with school_id), and programs in their intake. Use exactly those: search an occupation by its confirmed title and take the result with that SOC code, and pass a confirmed school_id straight to get_school_programs.
+
 Questions by intake path_type:
 - path1: college vs a trade vs working now, for their occupation (use occupation_code from intake when present).
 - path2: how the schools they named, or schools in their location, compare.

@@ -629,3 +629,16 @@ def get_school_programs(school_id: int, program_search: str | None = None) -> di
         "school_name": school.name if school else None,
         "programs": programs,
     }
+
+
+def school_program_titles(school_id: int) -> list[str] | None:
+    """Every program title a school offers, with or without earnings data, so
+    the intake can match what the user typed. None when programs can't load."""
+    if _ensure_programs(school_id):
+        return None
+    with _connect_with_retry() as conn:
+        rows = conn.execute(
+            text('SELECT DISTINCT title FROM "SchoolProgram" WHERE school_id = :id ORDER BY title'),
+            {"id": school_id},
+        )
+        return [r.title for r in rows]

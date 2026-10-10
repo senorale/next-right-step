@@ -34,10 +34,29 @@ def check(result: dict, expect: dict) -> list[str]:
     problems += [f"not offered: {i}" for i in expect.get("offered_include", []) if i not in offered]
     disabled = {int(o["value"]) for o in candidates if o.get("disabled")}
     problems += [f"not marked ineligible: {i}" for i in expect.get("disabled_include", []) if i not in disabled]
-    for key, value in expect.get("set", {}).items():
-        if (result.get("set") or {}).get(key) != value:
-            problems.append(f"set.{key} = {(result.get('set') or {}).get(key)!r}, expected {value!r}")
     choices = result.get("choices") or []
+    # What the step stores: "set" on ok, or the "Looks right" choice on a confirmation.
+    stored_set = result.get("set") or next((c.get("set") or {} for c in choices if c.get("label") == "Looks right"), {})
+    for key, value in expect.get("set", {}).items():
+        if stored_set.get(key) != value:
+            problems.append(f"set.{key} = {stored_set.get(key)!r}, expected {value!r}")
+    if "career_codes" in expect:
+        codes = sorted(m["soc_code"] for m in json.loads(stored_set.get("career_matches") or "[]"))
+        if codes != sorted(expect["career_codes"]):
+            problems.append(f"career codes {codes}, expected {sorted(expect['career_codes'])}")
+    items = (result.get("picks") or {}).get("items") or []
+    if "pick_matched" in expect:
+        matched = sorted(i["match"]["soc_code"] for i in items if i.get("match"))
+        if matched != sorted(expect["pick_matched"]):
+            problems.append(f"picks matched {matched}, expected {sorted(expect['pick_matched'])}")
+    if "pick_unclear" in expect:
+        unclear = sorted(i["typed"].lower() for i in items if not i.get("match"))
+        if unclear != sorted(expect["pick_unclear"]):
+            problems.append(f"picks unclear {unclear}, expected {sorted(expect['pick_unclear'])}")
+    if "program_list" in expect:
+        programs = json.loads(stored_set.get("program_list") or "null")
+        if programs != expect["program_list"]:
+            problems.append(f"program_list {programs}, expected {expect['program_list']}")
     labels = [c.get("label", "").lower() for c in choices]
     problems += [f"no choice {want!r}" for want in expect.get("choices_include", []) if want.lower() not in labels]
     codes = [(c.get("set") or {}).get("occupation_code") for c in choices]
@@ -46,6 +65,8 @@ def check(result: dict, expect: dict) -> list[str]:
         problems.append(f"{len(choices)} choices, expected {expect['choice_count']}: {labels}")
     if expect.get("switch_to") and not any((c.get("set") or {}).get("path_type") == expect["switch_to"] for c in choices):
         problems.append(f"no choice to switch to {expect['switch_to']}")
+    if "draft" in expect and not any(c.get("draft") == expect["draft"] for c in choices):
+        problems.append(f"no choice drafting {expect['draft']}")
     if "user_numbers" in expect:
         stored = next((json.loads(c["set"]["user_numbers"]) for c in choices if "user_numbers" in (c.get("set") or {})), {})
         if stored != expect["user_numbers"]:

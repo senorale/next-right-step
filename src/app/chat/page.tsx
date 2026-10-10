@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback, FormEvent } from 'react'
-import { Send, RotateCcw, ArrowRight, ArrowLeft, FileText, AlertTriangle } from 'lucide-react'
+import { Send, RotateCcw, ArrowRight, ArrowLeft, FileText, AlertTriangle, Loader2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -445,8 +445,25 @@ interface IntakeChoice {
   label: string
   set?: Record<string, string>
   clear?: string[]
+  /** Prefills later steps, which then get checked like any typed answer. */
+  draft?: Record<string, string>
   revalidate?: boolean
   edit?: boolean
+  /** Answers one item of the check's picks (see pickView). */
+  pick?: { index: number; entry: PickEntry }
+}
+
+interface PickEntry {
+  typed: string
+  soc_code: string
+  title: string
+}
+
+/** Each item the check matched, or the candidates the user picks from. */
+interface PickItem {
+  typed: string
+  match?: PickEntry
+  options?: { label: string; entry: PickEntry }[]
 }
 
 interface IntakeCheck {
@@ -454,16 +471,76 @@ interface IntakeCheck {
   message?: string
   set?: Record<string, string>
   choices?: IntakeChoice[]
+  /** Several answers matched in one call (path4 careers); the page asks about the unclear ones. */
+  picks?: { key: string; items: PickItem[] }
+}
+
+/**
+ * The step of a picks check to show: the next unclear item's candidates, one
+ * at a time, then the whole list to confirm. Everything was fetched in one
+ * call, so this makes no requests.
+ */
+function pickView(check: IntakeCheck, picked: Record<number, PickEntry>): IntakeCheck {
+  const { key, items } = check.picks!
+  const index = items.findIndex((item, i) => !item.match && !picked[i])
+  if (index >= 0) {
+    return {
+      status: 'confirm',
+      message: `Which of these is closest to "${items[index].typed}"?`,
+      choices: (items[index].options ?? []).map(({ label, entry }) => ({ label, pick: { index, entry } })),
+    }
+  }
+  const entries = items.map((item, i) => item.match ?? picked[i])
+  const unique = entries.filter((e, i) => entries.findIndex((o) => o.soc_code === e.soc_code) === i)
+  if (unique.length < 2) {
+    return { status: 'confirm', message: `Those all match ${unique[0].title}. Name at least two different careers.`, choices: [] }
+  }
+  return {
+    status: 'confirm',
+    message: `I'll compare: ${unique.map((e) => e.title).join(', ')}.`,
+    choices: [{ label: 'Looks right', set: { [key]: JSON.stringify(unique) } }],
+  }
 }
 
 /** Answers derived from a step by its check; dropped when the user goes back past that step. */
 const DERIVED_KEYS: Record<string, string[]> = {
   occupation: ['occupation_code', 'occupation_title'],
   target_schools: ['school_candidates'],
+  target_location: ['target_places', 'target_states'],
   specific_numbers: ['user_numbers'],
+  school_name: ['school_id', 'school_matched_name'],
+  programs: ['program_list'],
+  careers_to_compare: ['career_matches'],
+  target_career: ['target_career_code', 'target_career_title'],
+  current_field: ['current_field_normalized'],
+  current_role: ['current_role_code', 'current_role_title'],
   current_salary: ['current_salary_value'],
 }
 const HIDDEN_KEYS = new Set(Object.values(DERIVED_KEYS).flat())
+
+/** What the check is doing while the user waits, by step. */
+const CHECKING_MESSAGES: Record<string, string> = {
+  occupation: 'Looking up that occupation…',
+  target_career: 'Looking up that career…',
+  current_role: 'Looking up your job…',
+  careers_to_compare: 'Matching each career…',
+  target_schools: 'Finding those schools…',
+  school_name: 'Finding your school…',
+  programs: 'Checking programs at your school…',
+  target_location: 'Finding those places…',
+  specific_numbers: 'Reading your numbers…',
+  current_field: 'Reading your field of study…',
+  current_salary: 'Reading your salary…',
+}
+
+function CheckingStatus({ stepKey }: { stepKey: string }) {
+  return (
+    <div role="status" aria-live="polite" className="flex items-center gap-3 rounded-xl border border-primary/40 bg-primary/5 px-4 py-3">
+      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+      <p className="text-sm text-muted-foreground">{CHECKING_MESSAGES[stepKey] ?? 'Checking your answer…'}</p>
+    </div>
+  )
+}
 
 async function checkIntakeAnswer(key: string, value: string, answers: Record<string, string>): Promise<IntakeCheck> {
   try {
@@ -472,11 +549,16 @@ async function checkIntakeAnswer(key: string, value: string, answers: Record<str
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key, value, answers }),
     })
-    if (!res.ok) return { status: 'ok' }
-    return (await res.json()) as IntakeCheck
+    if (res.ok) return (await res.json()) as IntakeCheck
   } catch {
-    // Never block the intake on a failed check; the report step handles raw answers.
-    return { status: 'ok' }
+    // Handled below.
+  }
+  // Never block the intake on a failed check, but still confirm the answer;
+  // the report step handles raw answers.
+  return {
+    status: 'confirm',
+    message: `I'll use: "${value}".`,
+    choices: [{ label: 'Looks right' }, { label: 'Let me edit', edit: true }],
   }
 }
 
@@ -490,6 +572,10 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
   const [input, setInput] = useState('')
   const [checking, setChecking] = useState(false)
   const [check, setCheck] = useState<IntakeCheck | null>(null)
+  // A choice in the check is being checked again (e.g. one occupation of several picked).
+  const [resolving, setResolving] = useState(false)
+  // Answers to the check's picks so far, by item.
+  const [picked, setPicked] = useState<Record<number, PickEntry>>({})
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const current = getNextStep(answers)
@@ -554,13 +640,16 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
     setChecking(true)
     const result = await checkIntakeAnswer(current.key, value, base)
     setChecking(false)
+    setResolving(false)
+    setPicked({})
     if (result.status === 'ok') finish({ ...base, [current.key]: value, ...(result.set ?? {}) })
     else setCheck(result)
   }
 
   function advance() {
-    if (!pending || !current || checking || tooMany) return
-    // Free-text answers get checked (one occupation, usable numbers, ...) before moving on.
+    if (!pending || !current || checking || tooMany || check?.status === 'confirm') return
+    // Free-text answers get checked (one occupation, usable numbers, ...) and
+    // confirmed by the user before moving on.
     if (!current.options) {
       runCheck(pending, answers)
       return
@@ -570,21 +659,30 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
 
   function choose(choice: IntakeChoice) {
     if (!current) return
+    if (choice.pick) {
+      const { index, entry } = choice.pick
+      setPicked((prev) => ({ ...prev, [index]: entry }))
+      return
+    }
     if (choice.edit) {
       setCheck(null)
-      inputRef.current?.focus()
+      // The input box is back on the next render.
+      requestAnimationFrame(() => inputRef.current?.focus())
       return
     }
     const next = { ...answers, [current.key]: pending, ...(choice.set ?? {}) }
     if (choice.revalidate) {
-      // The choice replaced this step's answer (e.g. picked one of several occupations).
+      // The choice replaced this step's answer (e.g. picked one of several
+      // occupations); check the new answer.
       const value = choice.set?.[current.key] ?? pending
       setInput(value)
       setCheck(null)
+      setResolving(true)
       runCheck(value, answers)
       return
     }
     finish(next, choice.clear)
+    if (choice.draft) setDrafts((prev) => ({ ...prev, ...choice.draft }))
   }
 
   function goBack() {
@@ -612,6 +710,15 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
   }
 
   if (!current) return null
+
+  // While the user confirms how an answer was read, they work with the
+  // choices only; "Let me edit" brings the input box back.
+  const shown = check?.picks ? pickView(check, picked) : check
+  const confirming = shown?.status === 'confirm' || resolving
+  // "Let me edit" sits next to the question, not among the answers to it.
+  const choices = (shown?.choices ?? []).filter((c) => !c.edit)
+  const editChoice: IntakeChoice | null =
+    shown?.choices?.find((c) => c.edit) ?? (shown?.status === 'confirm' ? { label: 'Let me edit', edit: true } : null)
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -679,13 +786,15 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
             </div>
           )}
 
-          {current.placeholder && (
+          {current.placeholder && !confirming && (
             <div className="relative">
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={(e) => {
                   setInput(e.target.value)
+                  // A confirmation is about the text it checked.
+                  setCheck(null)
                   setSelected('')
                   setSelections([])
                   e.target.style.height = 'auto'
@@ -698,23 +807,38 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
                   }
                 }}
                 placeholder={current.placeholder}
+                disabled={checking}
                 rows={3}
                 className="w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               />
             </div>
           )}
 
-          {check && check.status !== 'ok' && (
+          {checking ? (
+            <CheckingStatus stepKey={current.key} />
+          ) : shown && shown.status !== 'ok' && (
             <div role="status" className="space-y-3 rounded-xl border border-primary/40 bg-primary/5 px-4 py-3">
-              {check.message && <p className="text-sm">{check.message}</p>}
-              {check.choices && check.choices.length > 0 && (
+              {confirming && <p className="text-xs text-muted-foreground">You wrote: “{pending}”</p>}
+              {(shown.message || editChoice) && (
+                <div className="flex items-start justify-between gap-3">
+                  {shown.message && <p className="text-sm">{shown.message}</p>}
+                  {editChoice && (
+                    <button
+                      onClick={() => choose(editChoice)}
+                      className="shrink-0 text-sm text-primary underline-offset-4 hover:underline"
+                    >
+                      {editChoice.label}
+                    </button>
+                  )}
+                </div>
+              )}
+              {choices.length > 0 && (
                 <div className="flex flex-wrap gap-2">
-                  {check.choices.map((choice) => (
+                  {choices.map((choice) => (
                     <button
                       key={choice.label}
                       onClick={() => choose(choice)}
-                      disabled={checking}
-                      className="rounded-full border-2 border-border px-4 py-2 text-sm transition-all hover:border-primary hover:bg-primary/5 disabled:opacity-50"
+                      className="rounded-full border-2 border-border px-4 py-2 text-sm transition-all hover:border-primary hover:bg-primary/5"
                     >
                       {choice.label}
                     </button>
@@ -739,7 +863,7 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
           </Button>
           <Button
             onClick={advance}
-            disabled={!pending || checking || tooMany}
+            disabled={!pending || checking || tooMany || confirming}
             className="gap-1.5"
           >
             {checking ? 'Checking…' : 'Next'}
@@ -1106,8 +1230,8 @@ function startingPointLines(answers: Record<string, string>): string[] {
   if (position) lines.push(`- Current position: ${position.label}`)
   const level = EDUCATION_LEVELS.find((l) => l.value === answers.education_level)
   if (level) lines.push(`- Highest education: ${level.label}`)
-  if (answers.current_field) lines.push(`- Field of study: ${answers.current_field}`)
-  if (answers.current_role) lines.push(`- Current job: ${answers.current_role}`)
+  if (answers.current_field) lines.push(`- Field of study: ${answers.current_field_normalized ?? answers.current_field}`)
+  if (answers.current_role) lines.push(`- Current job: ${withSoc(answers.current_role_title ?? answers.current_role, answers.current_role_code)}`)
   if (answers.compare_to_current === 'no') {
     lines.push('- Compare only these careers to each other, not to my current job')
     if (answers.payoff_baseline === 'salary' && answers.current_salary_value) {
@@ -1117,6 +1241,31 @@ function startingPointLines(answers: Record<string, string>): string[] {
     }
   }
   return lines
+}
+
+function withSoc(title: string, code?: string): string {
+  return code ? `${title} (SOC ${code})` : title
+}
+
+function parseList<T>(json: string | undefined): T[] | null {
+  try {
+    return json === undefined ? null : JSON.parse(json)
+  } catch {
+    return null
+  }
+}
+
+/** The careers the user confirmed on path4, else what they typed. */
+function careersLine(answers: Record<string, string>): string {
+  const matches = parseList<{ title: string; soc_code: string }>(answers.career_matches)
+  return matches?.length ? matches.map((m) => withSoc(m.title, m.soc_code)).join(', ') : answers.careers_to_compare
+}
+
+/** The programs the user confirmed on path3, else what they typed. */
+function programsLine(answers: Record<string, string>): string {
+  const programs = parseList<string>(answers.program_list)
+  if (!programs) return answers.programs
+  return programs.length ? programs.join('; ') : 'Not sure, show me the top programs'
 }
 
 function buildPrompt(answers: Record<string, string>): string {
@@ -1132,7 +1281,7 @@ function buildPrompt(answers: Record<string, string>): string {
       lines.push('- Data preference: use national medians')
     }
     if (answers.specific_numbers) lines.push(`- My specific numbers: ${answers.specific_numbers}`)
-    if (answers.occupation) lines.push(`- Occupation I'm interested in: ${answers.occupation_title ?? answers.occupation}`)
+    if (answers.occupation) lines.push(`- Occupation I'm interested in: ${withSoc(answers.occupation_title ?? answers.occupation, answers.occupation_code)}`)
     lines.push('')
     lines.push('Compare these five options side by side: (1) HS diploma baseline, (2) Cashier, (3) Electrician, (4) Bachelor\'s degree median, (5) my chosen occupation. Include full financial analysis with payoff timeline.')
   }
@@ -1140,7 +1289,10 @@ function buildPrompt(answers: Record<string, string>): string {
   if (path === 'path2') {
     lines.push(`- I've decided on college, comparing schools`)
     if (answers.target_schools) lines.push(`- Schools to compare: ${pickedSchoolNames(answers)}`)
-    if (answers.target_location) lines.push(`- Location: ${answers.target_location}`)
+    if (answers.target_location) {
+      const states = answers.target_states ? ` (states: ${answers.target_states})` : ''
+      lines.push(`- Location: ${answers.target_places ?? answers.target_location}${states}`)
+    }
     if (answers.compare_metrics) {
       const metrics = answers.compare_metrics.split('|')
       lines.push(`- Compare on: ${metrics.join(', ')}`)
@@ -1157,7 +1309,10 @@ function buildPrompt(answers: Record<string, string>): string {
 
   if (path === 'path3') {
     lines.push(`- I'm at or committed to a specific school, comparing programs`)
-    if (answers.school_name) lines.push(`- School: ${answers.school_name}`)
+    if (answers.school_name) {
+      const id = answers.school_id ? ` (school_id ${answers.school_id})` : ''
+      lines.push(`- School: ${answers.school_matched_name ?? answers.school_name}${id}`)
+    }
     if (answers.school_situation) {
       const situationText: Record<string, string> = {
         deciding: 'Deciding between programs',
@@ -1166,7 +1321,7 @@ function buildPrompt(answers: Record<string, string>): string {
       }
       lines.push(`- Situation: ${situationText[answers.school_situation] ?? answers.school_situation}`)
     }
-    if (answers.programs) lines.push(`- Programs: ${answers.programs}`)
+    if (answers.programs) lines.push(`- Programs: ${programsLine(answers)}`)
     if (answers.switch_reason) lines.push(`- Reason for switching: ${answers.switch_reason}`)
     if (answers.program_priority) lines.push(`- What matters most: ${answers.program_priority}`)
     lines.push('')
@@ -1175,7 +1330,7 @@ function buildPrompt(answers: Record<string, string>): string {
 
   if (path === 'path4') {
     lines.push(`- I want to compare career paths side by side`)
-    if (answers.careers_to_compare) lines.push(`- Careers to compare: ${answers.careers_to_compare}`)
+    if (answers.careers_to_compare) lines.push(`- Careers to compare: ${careersLine(answers)}`)
     lines.push(...startingPointLines(answers))
     lines.push('')
     lines.push('Compare each career path: education required, timeline, cost, salary, bright outlook, payoff timeline. Full financial analysis for all paths.')
@@ -1183,7 +1338,7 @@ function buildPrompt(answers: Record<string, string>): string {
 
   if (path === 'path5') {
     lines.push(`- I have a specific career in mind`)
-    if (answers.target_career) lines.push(`- Target career: ${answers.target_career}`)
+    if (answers.target_career) lines.push(`- Target career: ${withSoc(answers.target_career_title ?? answers.target_career, answers.target_career_code)}`)
     lines.push(...startingPointLines(answers))
     lines.push('')
     lines.push('Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected salary, time to recoup. Show gap analysis if I have relevant education.')
