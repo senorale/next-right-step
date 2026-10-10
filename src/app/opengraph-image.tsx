@@ -13,7 +13,7 @@ const BLUE = '#2563eb'
 const BLUE_ON_DARK = '#60a5fa'
 
 // The logo's winding route on a 64-unit grid: the path taken, two roads not
-// taken, a dotted alternative, and the next step in blue. Same mark as icon.svg.
+// taken, a dotted alternative, and the next step as a blue arrow. Same mark as icon.svg.
 function Route({ ink, blue, width, viewBox, w = 6 }: { ink: string; blue: string; width: number; viewBox: string; w?: number }) {
   const [, , vw, vh] = viewBox.split(' ').map(Number)
   const line = { fill: 'none', strokeLinecap: 'round', strokeLinejoin: 'round' } as const
@@ -24,7 +24,7 @@ function Route({ ink, blue, width, viewBox, w = 6 }: { ink: string; blue: string
       <path d="M37.5 33Q42 30 47 27" stroke={ink} strokeOpacity={0.5} strokeWidth={w - 1} {...line} />
       <path d="M32 24Q32 16 22 10" stroke={ink} strokeOpacity={0.45} strokeWidth={w - 1} strokeDasharray={`0.1 ${w - 0.5}`} {...line} />
       <path d="M32 24Q32 16 42 10" stroke={blue} strokeWidth={w} {...line} />
-      <circle cx="42" cy="10" r={w - 1} fill={blue} />
+      <path d="M46.8 7.1L44.8 14.6L38.9 5.4Z" fill={blue} stroke={blue} strokeWidth={2.5} strokeLinejoin="round" />
     </svg>
   )
 }
