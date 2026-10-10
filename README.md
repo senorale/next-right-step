@@ -1,21 +1,14 @@
 # Next Right Step
 
-A tool for people trying to figure out their next right step: college, a new career, or staying put. 
+A tool for people trying to figure out their next right step: college, a new career, or staying put.
 
-
-We put unbiased, government-issued data in front of you so you can make the decision yourself. 
-
-We won't push you toward any particular path.
-
-
-Everything here comes from public U.S. government sources that have been available for years. We just don't think they're compiled and presented in a useful way anywhere else.
+We put unbiased, government-issued data in front of you so you can make the decision yourself, without pushing you toward any particular path. Everything here comes from public U.S. government sources that have been available for years. We just don't think they're compiled and presented in a useful way anywhere else.
 
 ## Origin
 
 Next Right Step started as **Should I Go?**, [Michael Branconier](https://github.com/mikebranc)'s idea, built in August 2024 ([mikebranc/should-i-go](https://github.com/mikebranc/should-i-go)). It was a college cost calculator: you entered your tuition, loan terms, expected salary, and years in school, and it showed what the degree would really cost and how long it would take to pay off.
 
-[Alejandro Carvajal](https://github.com/senorale) joined in 2025 and grounded it in public data: BLS salaries by occupation, national medians to compare your own numbers against, and College Scorecard costs. 
-
+[Alejandro Carvajal](https://github.com/senorale) joined in 2025 and grounded it in public data: BLS salaries by occupation, national medians to compare your own numbers against, and College Scorecard costs.
 
 In 2026 he added an AI counselor, then re-imagined the whole app around a wider question: not just "should I go to college?" but "what's my next right step?" That redesign became Next Right Step. This repository continues from Mike's original, with its full history.
 
@@ -40,28 +33,28 @@ The **FAQ** (`/faq`) explains every data source and calculation.
 | Data | Source | How it's loaded |
 |---|---|---|
 | Salaries by occupation | [BLS Occupational Employment and Wage Statistics](https://www.bls.gov/oes/), May 2024 national medians | Seeded from `data/national_data.csv` |
-| Schools (net price by income, outcomes, debt, earnings) | [College Scorecard](https://collegescorecard.ed.gov/data/) API | Bachelor's schools seeded; others fetched on first search and stored |
+| Schools (net price by income, outcomes, graduates' median debt, earnings) | [College Scorecard](https://collegescorecard.ed.gov/data/) API | Bachelor's schools seeded; others fetched on first search and stored |
 | Programs at a school | College Scorecard API | Fetched the first time a school is opened, then stored |
 | Median debt by degree field and credential | College Scorecard Field of Study file | Aggregated across schools at seed time |
 | Degree fields to occupations | [NCES CIP-SOC crosswalk](https://nces.ed.gov/ipeds/cipcode/resources.aspx?y=56) | Seeded from `data/cip_soc_crosswalk.csv` |
 | Typical years of school per occupation | [O*NET Web Services](https://services.onetcenter.org/) (USDOL/ETA) | Stored per occupation, backfilled from the API |
 
-Data scripts are additive: they upsert or insert missing rows and never delete.
+The files in `data/` are seed inputs only. The app and the counselor API read everything from the database and never open them; you only need them to seed a fresh database. Seed scripts upsert and never delete.
 
 ## How the numbers work
 
-**Cost** is median student debt, not tuition. Debt is what students actually borrow and repay after grants, scholarships, and family help, and College Scorecard reports it per degree field and credential, so each career gets its own estimate. Careers that need a graduate degree add the national median bachelor's debt. When no related field reports debt, the app estimates from the broader field family and labels it. Compare schools is the exception: it uses each school's net price times years of school, assuming the full amount is borrowed.
+**Cost** is median student debt, not tuition. Debt is what students actually borrow and repay after grants, scholarships, and family help, and College Scorecard reports it per degree field and credential, so each career gets its own estimate. Careers that need a graduate degree add the national median bachelor's debt. When no related field reports debt, the app estimates from the broader field family and labels it. Schools use their own graduates' median debt in the guided report. Compare schools is the exception: it uses each school's net price times years of school, assuming the full amount is borrowed.
 
 **Payoff timeline**:
 
 ```
 total cost = debt + loan interest + (starting salary x years in school)
-payoff     = total cost / (new salary - starting salary)
+payoff     = years in school + total cost / (new salary - starting salary)
 ```
 
 - Loan interest: 6.5% over 20 years, how long borrowers typically take (the 10-year federal plan is the exception, not the norm).
 - Starting salary: the $46,748 national median for a high school diploma by default, or your own salary or current job.
-- Payoff is the number of working years for the higher salary to recover the total cost. If the new salary isn't higher, it doesn't pay off.
+- Payoff counts from the first day of school: years in school, then the working years for the higher salary to recover the total cost. If the new salary isn't higher, it doesn't pay off.
 
 Constants live in `src/app/constants/college_related_constants.ts`, and the shared math in `src/app/components/paths/finance.ts` and `src/lib/career-cost.ts`.
 
