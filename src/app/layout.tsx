@@ -8,9 +8,15 @@ import FeedbackDialog from "./components/FeedbackDialog";
 
 const inter = Inter({ subsets: ["latin"] });
 
+const description = "A free financial tool to help you take your next right step: compare the real cost and payoff of college, trades, and careers.";
+
 export const metadata: Metadata = {
+  // Link previews need absolute image URLs. SITE_URL overrides the default, e.g. for a custom domain.
+  metadataBase: new URL(process.env.SITE_URL ?? "https://next-right-step.up.railway.app"),
   title: "Next Right Step",
-  description: "Compare the real cost and payoff of college, trades, and careers",
+  description,
+  openGraph: { title: "Next Right Step", description, siteName: "Next Right Step", type: "website" },
+  twitter: { card: "summary_large_image", title: "Next Right Step", description },
 };
 
 export default function RootLayout({
