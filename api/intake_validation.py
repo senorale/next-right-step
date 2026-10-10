@@ -31,7 +31,7 @@ import json
 import logging
 import re
 
-from db import school_program_titles, search_occupations, search_schools
+from db import occupations_by_title, school_program_titles, search_occupations, search_schools
 from options import school_missing
 from llm import MODEL, client
 from user_numbers import _numbers_in, extract_user_numbers
@@ -78,8 +78,16 @@ OCCUPATIONS_SCHEMA = {
     "properties": {
         "occupations": {
             "type": "array",
-            "items": {"type": "string"},
-            "description": "Each distinct job or career the user names, in their words",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "typed": {"type": "string", "description": "The job or career as the user wrote it"},
+                    "soc_titles": {"type": "array", "items": {"type": "string"},
+                                   "description": "Official SOC occupation titles it most likely falls under, most likely first"},
+                },
+                "required": ["typed", "soc_titles"],
+                "additionalProperties": False,
+            },
         },
     },
     "required": ["occupations"],
@@ -87,41 +95,54 @@ OCCUPATIONS_SCHEMA = {
 }
 OCCUPATIONS_PROMPT = (
     "List each distinct job or career the user names, in their own words. Several jobs listed together "
-    "are separate entries. Return an empty list if they name no specific job (e.g. 'something that pays well')."
+    "are separate entries. Return an empty list if they name no specific job (e.g. 'something that pays well').\n"
+    "For each, give up to 3 official 2018 SOC occupation titles, written exactly as BLS writes them, that the job "
+    "most likely falls under, most likely first. Modern or industry job titles map to the SOC occupation that does "
+    "that work (growth marketer -> Marketing Managers, Market Research Analysts and Marketing Specialists)."
 )
 
 
-async def extract_occupations(text: str) -> list[str] | None:
-    """Occupations named in free text; None when the model call fails."""
-    try:
-        response = await client.chat.completions.create(
-            model=MODEL,
-            max_tokens=256,
-            messages=[{"role": "system", "content": OCCUPATIONS_PROMPT}, {"role": "user", "content": text}],
-            response_format={"type": "json_schema", "json_schema": {"name": "occupations", "schema": OCCUPATIONS_SCHEMA}},
-        )
-        names = json.loads(response.choices[0].message.content or "{}").get("occupations", [])
-        return [n.strip() for n in names if isinstance(n, str) and n.strip()]
-    except Exception:
-        logger.exception("Extracting occupations failed")
+async def extract_occupations(text: str) -> list[dict] | None:
+    """[{"typed", "soc_titles"}] for each occupation named in free text; None
+    when the model call fails."""
+    parsed = await _ask_json("occupations", OCCUPATIONS_SCHEMA, OCCUPATIONS_PROMPT, text, max_tokens=512)
+    if parsed is None:
         return None
+    named = [o for o in parsed.get("occupations") or [] if isinstance(o, dict) and (o.get("typed") or "").strip()]
+    return [{"typed": o["typed"].strip(),
+             "soc_titles": [t for t in o.get("soc_titles") or [] if isinstance(t, str) and t.strip()][:3]}
+            for o in named]
+
+
+def _as_named(names: list[str]) -> list[dict]:
+    """Typed names without SOC guesses, for when the model call fails."""
+    return [{"typed": n, "soc_titles": []} for n in names]
 
 
 def _stem(text: str) -> str:
     return re.sub(r"s\b", "", text.lower()).strip()
 
 
-def match_occupation(keyword: str, max_choices: int = 3) -> tuple[dict | None, list[dict]]:
-    """O*NET search for one occupation. Returns (clear_match, candidates): a
-    clear match when the top result's title contains what the user typed
-    (e.g. "lawyer" and "Lawyers"), else up to max_choices candidates to confirm."""
-    results = [r for r in search_occupations(keyword).get("results", []) if r.get("annual_salary")]
-    if not results:
-        return None, []
-    top = results[0]
-    if _stem(keyword) in _stem(top["title"]):
-        return top, []
-    return None, results[:max_choices]
+def match_occupation(named: dict, max_choices: int = 3) -> tuple[dict | None, list[dict]]:
+    """One occupation: an O*NET search on what the user typed, plus the SOC
+    titles the model guessed (checked against the occupations table, so a
+    made-up title is dropped). O*NET matches words, so a modern title like
+    "account executive" finds advertising jobs; the guesses bring in the SOC
+    occupation that does the work. Returns (clear_match, candidates): a clear
+    match when O*NET's top result contains what the user typed ("lawyer" and
+    "Lawyers") or is the model's first guess; else up to max_choices
+    candidates to pick from, guesses first."""
+    typed = named["typed"]
+    results = [r for r in search_occupations(typed).get("results", []) if r.get("annual_salary")]
+    guesses = occupations_by_title(named.get("soc_titles") or [])
+    if results:
+        top = results[0]
+        if _stem(typed) in _stem(top["title"]) or (guesses and guesses[0]["soc_code"] == top["soc_code"]):
+            return top, []
+    candidates: dict[str, dict] = {}
+    for c in guesses + results:
+        candidates.setdefault(c["soc_code"], c)
+    return None, list(candidates.values())[:max_choices]
 
 
 def _salary(result: dict) -> str:
@@ -143,10 +164,11 @@ async def _validate_one_occupation(value: str, key: str, keys: tuple[str, str], 
     pick one, or switch to path4 to compare them (the careers step is
     prefilled and checked there). keys names the (code, title) answers to set;
     what describes the comparison for the "pick one" message."""
-    names = await extract_occupations(value)
-    if names is None:
+    named = await extract_occupations(value)
+    if named is None:
         # Model call failed: split on obvious separators rather than block the user.
-        names = _split(value)
+        named = _as_named(_split(value))
+    names = [n["typed"] for n in named]
     if not names:
         return {"status": "fix", "message": ask}
     if len(names) > 1:
@@ -162,7 +184,7 @@ async def _validate_one_occupation(value: str, key: str, keys: tuple[str, str], 
                 "revalidate": False,
             }],
         }
-    match, candidates = await asyncio.to_thread(match_occupation, names[0])
+    match, candidates = await asyncio.to_thread(match_occupation, named[0])
     if match:
         return _confirm(f"I'll use {match['title']} ({_salary(match)}).", _occupation_set(match, keys))
     if not candidates:
@@ -196,12 +218,13 @@ async def validate_target_career(value: str, answers: dict) -> dict:
 
 
 async def validate_current_role(value: str, answers: dict) -> dict:
-    """The user's current job (path4 and path5). A role O*NET doesn't know is
-    kept as typed, since it only labels the user's starting point."""
+    """The user's current job (path4 and path5), matched like any occupation.
+    Only a role with no match at all is kept as typed."""
     keys = ("current_role_code", "current_role_title")
-    names = await extract_occupations(value)
-    if names is None:
-        names = [value.strip()]
+    named = await extract_occupations(value)
+    if named is None:
+        named = _as_named([value.strip()])
+    names = [n["typed"] for n in named]
     if not names:
         return {"status": "fix", "message": "What's your job? Name it, like retail manager or IT support."}
     if len(names) > 1:
@@ -211,8 +234,7 @@ async def validate_current_role(value: str, answers: dict) -> dict:
             "choices": [{"label": n, "set": {"current_role": n}, "revalidate": True} for n in names],
         }
     name = names[0]
-    as_typed = {"label": f"Keep \"{name}\"", "set": {"current_role_title": name}, "revalidate": False}
-    match, candidates = await asyncio.to_thread(match_occupation, name)
+    match, candidates = await asyncio.to_thread(match_occupation, named[0])
     if match:
         return _confirm(f"Your current job: {match['title']} ({_salary(match)}).", _occupation_set(match, keys))
     if not candidates:
@@ -220,7 +242,7 @@ async def validate_current_role(value: str, answers: dict) -> dict:
     return {
         "status": "confirm",
         "message": f"Which of these is closest to \"{name}\"?",
-        "choices": [_occupation_choice(c, keys) for c in candidates] + [as_typed],
+        "choices": [_occupation_choice(c, keys) for c in candidates],
     }
 
 
@@ -230,12 +252,13 @@ async def validate_careers_to_compare(value: str, answers: dict) -> dict:
     the match, or the candidates to pick from. The frontend asks about the
     unclear ones one at a time, confirms the whole list, and stores
     career_matches, with no further calls."""
-    names = await extract_occupations(value)
-    if names is None:
-        names = _split(value)
+    named = await extract_occupations(value)
+    if named is None:
+        named = _as_named(_split(value))
+    names = [n["typed"] for n in named]
     if len(names) < 2:
         return {"status": "fix", "message": "Name at least two careers to compare, separated by commas."}
-    found = await asyncio.gather(*(asyncio.to_thread(match_occupation, n) for n in names))
+    found = await asyncio.gather(*(asyncio.to_thread(match_occupation, n) for n in named))
 
     def entry(typed: str, result: dict) -> dict:
         return {"typed": typed, "soc_code": result["soc_code"], "title": result["title"]}

@@ -642,3 +642,22 @@ def school_program_titles(school_id: int) -> list[str] | None:
             {"id": school_id},
         )
         return [r.title for r in rows]
+
+
+def occupations_by_title(titles: list[str]) -> list[dict]:
+    """Occupations whose SOC title is exactly one of titles (any case), in the
+    order given, with BLS salary. Titles that match nothing are dropped."""
+    wanted = [t.strip().lower() for t in titles if t and t.strip()]
+    if not wanted:
+        return []
+    params = {f"t{i}": t for i, t in enumerate(wanted)}
+    names_sql = ", ".join(f":t{i}" for i in range(len(wanted)))
+    with _connect_with_retry() as conn:
+        rows = conn.execute(
+            text(f'SELECT occupation_code, name, annual_salary FROM "OccupationSubCategory" '
+                 f'WHERE lower(name) IN ({names_sql}) AND annual_salary IS NOT NULL'),
+            params,
+        )
+        found = {r.name.lower(): {"soc_code": r.occupation_code, "title": r.name, "annual_salary": float(r.annual_salary)}
+                 for r in rows}
+    return [found[t] for t in dict.fromkeys(wanted) if t in found]

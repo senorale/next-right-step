@@ -59,7 +59,8 @@ def check(result: dict, expect: dict) -> list[str]:
             problems.append(f"program_list {programs}, expected {expect['program_list']}")
     labels = [c.get("label", "").lower() for c in choices]
     problems += [f"no choice {want!r}" for want in expect.get("choices_include", []) if want.lower() not in labels]
-    codes = [(c.get("set") or {}).get("occupation_code") for c in choices]
+    # Occupation choices store the code under the step's key (occupation_code, target_career_code, ...).
+    codes = [v for c in choices for k, v in (c.get("set") or {}).items() if k.endswith("_code")]
     problems += [f"no choice for {code}" for code in expect.get("choice_codes_include", []) if code not in codes]
     if "choice_count" in expect and len(choices) != expect["choice_count"]:
         problems.append(f"{len(choices)} choices, expected {expect['choice_count']}: {labels}")
