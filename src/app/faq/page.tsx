@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { ChevronDown } from 'lucide-react'
 import type { ReactNode } from 'react'
 import * as C from '@/app/constants/college_related_constants'
+import OpenFromHash from './OpenFromHash'
 
 export const metadata: Metadata = {
   title: 'FAQ · Next Right Step',
@@ -18,7 +19,8 @@ const Ext = ({ href, children }: { href: string; children: ReactNode }) => (
   </a>
 )
 
-const faqs: { q: string; a: ReactNode }[] = [
+/** id: anchor other pages link to (/faq#id); the entry opens when linked. */
+const faqs: { q: string; a: ReactNode; id?: string }[] = [
   {
     q: 'Who are we?',
     a: (
@@ -274,6 +276,41 @@ const faqs: { q: string; a: ReactNode }[] = [
     ),
   },
   {
+    q: "Why can't I find my job title?",
+    id: 'find-your-occupation',
+    a: (
+      <div className="space-y-2">
+        <p>
+          Salaries and education come from the government&apos;s list of about 800 official occupations (the{' '}
+          <Ext href="https://www.bls.gov/soc/">Standard Occupational Classification</Ext>). Those names describe
+          the work, not the job title on your offer letter, and many newer titles aren&apos;t on the list at all.
+          They&apos;re counted under a broader occupation that does the same work:
+        </p>
+        <ul className="list-disc space-y-1.5 pl-4">
+          <li>
+            <Strong>Account executive or software sales:</Strong> Sales Representatives, Wholesale and
+            Manufacturing, Technical and Scientific Products
+          </li>
+          <li>
+            <Strong>Software engineer:</Strong> Software Developers
+          </li>
+          <li>
+            <Strong>Customer success manager:</Strong> often Sales Managers or Management Analysts, depending on
+            whether the role is mostly selling or mostly advising
+          </li>
+          <li>
+            <Strong>Recruiter:</Strong> Human Resources Specialists
+          </li>
+        </ul>
+        <p>
+          Search for the kind of work instead of the title: &ldquo;sales&rdquo;, &ldquo;manager&rdquo;,
+          &ldquo;analyst&rdquo;, &ldquo;developer&rdquo;. The <Strong>guided experience</Strong> does this for you:
+          type your job title the way you&apos;d say it and it suggests the closest occupations.
+        </p>
+      </div>
+    ),
+  },
+  {
     q: 'Why do you use the median instead of the average?',
     a: (
       <>
@@ -306,8 +343,8 @@ export default function FaqPage() {
         </div>
 
         <div className="space-y-3">
-          {faqs.map(({ q, a }) => (
-            <details key={q} className="group rounded-lg border bg-card p-4">
+          {faqs.map(({ q, a, id }) => (
+            <details key={q} id={id} className="group scroll-mt-4 rounded-lg border bg-card p-4">
               <summary className="flex cursor-pointer list-none items-center justify-between font-medium">
                 {q}
                 <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
@@ -316,6 +353,7 @@ export default function FaqPage() {
             </details>
           ))}
         </div>
+        <OpenFromHash />
       </div>
     </main>
   )
