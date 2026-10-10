@@ -274,7 +274,7 @@ _SCHOOL_FIELDS = ",".join([
     "latest.cost.avg_net_price.overall",
     *[f"latest.cost.net_price.consumer.by_income_level.{b}" for b in _INCOME_BRACKETS],
     "latest.completion.rate_suppressed.overall",
-    "latest.aid.median_debt_suppressed.overall",
+    "latest.aid.median_debt_suppressed.completers.overall",
     "latest.earnings.6_yrs_after_entry.median",
     "latest.earnings.10_yrs_after_entry.median",
     "latest.admissions.admission_rate.overall",
@@ -364,7 +364,7 @@ def _map_school(r: dict) -> dict | None:
             b: _int(r.get(f"latest.cost.net_price.consumer.by_income_level.{b}")) for b in _INCOME_BRACKETS
         }),
         "graduation_rate": _safe_float(r.get("latest.completion.rate_suppressed.overall")),
-        "median_debt": _int(r.get("latest.aid.median_debt_suppressed.overall")),
+        "median_debt": _int(r.get("latest.aid.median_debt_suppressed.completers.overall")),
         "earnings_6yr": _int(r.get("latest.earnings.6_yrs_after_entry.median")),
         "earnings_10yr": _int(r.get("latest.earnings.10_yrs_after_entry.median")),
         "admission_rate": _safe_float(r.get("latest.admissions.admission_rate.overall")),
