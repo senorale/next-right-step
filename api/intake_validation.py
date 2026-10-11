@@ -485,7 +485,7 @@ async def validate_programs(value: str, answers: dict) -> dict:
     titles = None
     if (answers.get("school_id") or "").isdigit():
         titles = await asyncio.to_thread(school_program_titles, int(answers["school_id"]))
-    parsed = await _ask_json("programs", PROGRAMS_SCHEMA, PROGRAMS_PROMPT + "\n".join(titles or []), value, max_tokens=512)
+    parsed = await _ask_json("programs", PROGRAMS_SCHEMA, PROGRAMS_PROMPT + "\n".join(titles or {}), value, max_tokens=512)
     if parsed is None:
         return _confirm(f"I'll compare: {value.strip()}.", {"program_list": json.dumps(_split(value))})
     named = [p for p in parsed.get("programs") or [] if isinstance(p, dict) and (p.get("typed") or "").strip()]
@@ -497,12 +497,19 @@ async def validate_programs(value: str, answers: dict) -> dict:
         # No program list for this school: confirm the names as typed.
         return _confirm(f"I'll compare: {', '.join(p['typed'] for p in named)}.",
                         {"program_list": json.dumps([p["typed"] for p in named])})
-    offered = set(titles)
-    found = list(dict.fromkeys(p["title"] for p in named if p.get("title") in offered))
-    missing = [p["typed"] for p in named if p.get("title") not in offered]
-    if not missing:
+    found = list(dict.fromkeys(p["title"] for p in named if titles.get(p.get("title"))))
+    # Like path2's schools: a program without earnings has no pay to compare.
+    no_earnings = list(dict.fromkeys(p["title"] for p in named if titles.get(p.get("title")) is False))
+    missing = [p["typed"] for p in named if p.get("title") not in titles]
+    if not missing and not no_earnings:
         return _confirm(f"I'll compare at {school}: {'; '.join(found)}.", {"program_list": json.dumps(found)})
-    message = f"I couldn't find {', '.join(missing)} at {school}. Check the name, or use another program."
+    problems = []
+    if missing:
+        problems.append(f"I couldn't find {', '.join(missing)} at {school}. Check the name, or use another program.")
+    if no_earnings:
+        problems.append(f"College Scorecard has no earnings data for {'; '.join(no_earnings)} at {school}, "
+                        "so it can't be compared. Pick another program.")
+    message = " ".join(problems)
     choices = [{"label": f"Continue with {'; '.join(found)}", "set": {"program_list": json.dumps(found)}, "revalidate": False}] if found else []
     return {"status": "fix", "message": message, "choices": choices}
 

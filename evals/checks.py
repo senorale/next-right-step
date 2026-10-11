@@ -179,10 +179,12 @@ def choice_checks(report_html: str, rows: list[dict], expect: dict | None) -> di
         count = sum(i.startswith(prefix) for i in shown_ids)
         results["min_options"] = [] if count >= least else [f"{count} {prefix} rows, expected at least {least}"]
     if "ranked_by" in expect:
-        key, direction = expect["ranked_by"]
+        # [key, direction] or [key, direction, option_id prefix of the ranked rows].
+        key, direction, *prefix = expect["ranked_by"]
         # Baselines (high school, bachelor's) are references, not ranked options.
         values = [(r["name"], _value(r, key)) for r in shown
-                  if not r["option_id"].startswith("baseline:") and _value(r, key) is not None]
+                  if not r["option_id"].startswith("baseline:") and r["option_id"].startswith(tuple(prefix) or "")
+                  and _value(r, key) is not None]
         ordered = sorted(values, key=lambda v: v[1], reverse=direction == "desc")
         results["ranked_by"] = [] if values == ordered else [f"order {[n for n, _ in values]}, expected {[n for n, _ in ordered]}"]
     if "allowed_metrics" in expect:

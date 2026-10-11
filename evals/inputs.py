@@ -91,6 +91,25 @@ def check(content: dict, fixed: list[dict] | None, data_blocks: list[dict], inta
             ]
         results["path1_rows"] = problems
 
+    if "program_ids" in expect:
+        # path3: exactly the programs the user confirmed (or, not sure, the
+        # school's top programs), each with the occupations it leads to.
+        programs = {o["option_id"]: o for o in fixed or [] if o["option_id"].startswith("program:")}
+        want = expect["program_ids"]
+        if isinstance(want, dict):  # not sure: {"min": n, "credential_level": 3}
+            results["program_rows"] = [] if len(programs) >= want["min"] else [f"{len(programs)} programs, expected at least {want['min']}"]
+            results["program_rows"] += [f"{i} isn't credential level {want['credential_level']}" for i in programs
+                                        if not i.endswith(f":{want['credential_level']}")]
+        else:
+            results["program_rows"] = [f"missing {i}" for i in want if i not in programs] + [
+                f"extra {i}" for i in programs if i not in want]
+        ids = {o["option_id"] for o in fixed or []}
+        results["leads_to"] = [f"{p} has no occupations" for p, o in programs.items() if not o.get("leads_to")]
+        results["leads_to"] += [f"{p} leads_to {i}, which has no row" for p, o in programs.items()
+                                for i in o.get("leads_to") or [] if i not in ids]
+        results["leads_to"] += [f"{p} doesn't lead to {i}" for p, occs in expect.get("leads_to", {}).items()
+                                for i in occs if i not in (programs.get(p) or {}).get("leads_to", [])]
+
     if "user_numbers" in expect:
         # The user's figures must reach the report as structured values, not
         # only as the raw intake text the report model has to parse.
@@ -130,6 +149,10 @@ async def run_case(case: dict) -> dict:
         checks = {"report_input_built": {"pass": False, "hits": [f"no report input; reply: {final.get('response', '')[:200]}"]}}
     else:
         checks = check(captured["content"], captured["fixed"], captured["data_blocks"], case["intake_answers"], case["expect"])
+    if "tools" in case["expect"]:
+        # Data a tool builds in code shouldn't be gathered again by the model.
+        extra = sorted({t["name"] for t in tool_calls} - set(case["expect"]["tools"]))
+        checks["only_expected_tools"] = {"pass": not extra, "hits": [f"called {n}" for n in extra]}
     return {"id": case["id"], "tool_calls": tool_calls, "checks": checks, "report_input": captured.get("content")}
 
 

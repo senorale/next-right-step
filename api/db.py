@@ -631,17 +631,83 @@ def get_school_programs(school_id: int, program_search: str | None = None) -> di
     }
 
 
-def school_program_titles(school_id: int) -> list[str] | None:
-    """Every program title a school offers, with or without earnings data, so
-    the intake can match what the user typed. None when programs can't load."""
+def school_program_titles(school_id: int) -> dict[str, bool] | None:
+    """Every program title a school offers -> whether any credential level has
+    earnings data, so the intake can match what the user typed and turn away
+    programs it can't compare. None when programs can't load."""
     if _ensure_programs(school_id):
         return None
     with _connect_with_retry() as conn:
         rows = conn.execute(
-            text('SELECT DISTINCT title FROM "SchoolProgram" WHERE school_id = :id ORDER BY title'),
+            text("""SELECT title, bool_or(earnings_1yr IS NOT NULL OR earnings_4yr IS NOT NULL) AS has_earnings
+                    FROM "SchoolProgram" WHERE school_id = :id GROUP BY title ORDER BY title"""),
             {"id": school_id},
         )
-        return [r.title for r in rows]
+        return {r.title: bool(r.has_earnings) for r in rows}
+
+
+def school_programs(school_id: int) -> dict:
+    """Every program a school offers, at each credential level, with its
+    earnings, its median debt, and the national median debt for the same
+    field and credential (a fallback when the school reports none)."""
+    error = _ensure_programs(school_id)
+    if error:
+        return {"error": error}
+    with _connect_with_retry() as conn:
+        school = conn.execute(text('SELECT name FROM "School" WHERE school_id = :id'), {"id": school_id}).first()
+        rows = conn.execute(
+            text("""
+                SELECT p.cip_code, p.title, p.credential_level, p.earnings_1yr, p.earnings_4yr, p.median_debt,
+                       pd.median_debt AS national_median_debt
+                FROM "SchoolProgram" p
+                LEFT JOIN "CipCode" c ON c.code = p.cip_code
+                LEFT JOIN "ProgramDebt" pd ON pd.cip_id = c.id AND pd.credential_level = p.credential_level
+                     AND pd.school_type = 'all'
+                WHERE p.school_id = :id
+                ORDER BY p.title, p.credential_level
+            """),
+            {"id": school_id},
+        )
+        programs = [
+            {
+                "cip_code": r.cip_code,
+                "title": r.title,
+                "credential": _CREDENTIAL_LEVELS.get(r.credential_level, f"Level {r.credential_level}"),
+                "credential_level": r.credential_level,
+                "earnings_1yr_after_graduation": r.earnings_1yr,
+                "earnings_4yr_after_graduation": r.earnings_4yr,
+                "median_debt": r.median_debt,
+                "national_median_debt": r.national_median_debt,
+            }
+            for r in rows
+        ]
+    return {"school_id": school_id, "school_name": school.name if school else None, "programs": programs}
+
+
+def cip_occupations(cip_codes: list[str]) -> dict[str, list[dict]]:
+    """Occupations each degree field leads to (CIP-SOC crosswalk), highest
+    BLS salary first."""
+    if not cip_codes:
+        return {}
+    with _connect_with_retry() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT c.code, o.occupation_code, o.name, o.annual_salary, o.typical_years_of_school
+                FROM "CipOccupation" co
+                JOIN "CipCode" c ON c.id = co.cip_id
+                JOIN "OccupationSubCategory" o ON o.id = co.occupation_id
+                WHERE c.code = ANY(:codes)
+                ORDER BY o.annual_salary DESC
+            """),
+            {"codes": list(cip_codes)},
+        )
+        out: dict[str, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r.code, []).append({
+                "soc_code": r.occupation_code, "title": r.name, "annual_salary": float(r.annual_salary),
+                "typical_years_of_school": _safe_float(r.typical_years_of_school),
+            })
+    return out
 
 
 def occupations_by_title(titles: list[str]) -> list[dict]:

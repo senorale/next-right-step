@@ -29,6 +29,8 @@ LABELS = {
 }
 POSITIONS = {"working": "Working", "in_college": "In college", "high_school": "In high school", "looking_for_work": "Looking for work"}
 LEVELS = {"some_college": "Some college, no degree", "associate": "Associate's", "bachelor": "Bachelor's", "hs": "High school diploma or GED"}
+SITUATIONS = {"deciding": "Deciding between programs", "current": "Already in a program, exploring outcomes",
+              "switching": "Thinking about switching programs"}
 # METRIC_TO_SORT in src/app/chat/page.tsx
 SORT = {"Earnings after graduation": "earnings", "Graduation rate": "graduation_rate", "Net price / cost": "net_price",
         "Debt at graduation": "median_debt", "Admission rate": "admission_rate", "Retention rate": "retention_rate",
@@ -49,9 +51,18 @@ def chat_message(a: dict) -> str:
         lines += [f"- Rank by: {a['rank_by']}", f"- sort_by: {SORT[a['rank_by']]}", "",
                   "Show me up to 5 schools ranked by my chosen metric, with only the metrics I selected. Include full financial analysis."]
     elif path == "path3":
-        lines += ["- I'm at or committed to a specific school, comparing programs", f"- School: {a['school_name']}",
-                  "- Situation: Deciding between programs", f"- Programs: {a['programs']}",
-                  f"- What matters most: {a['program_priority']}", "",
+        school_id = f" (school_id {a['school_id']})" if a.get("school_id") else ""
+        # programsLine in src/app/chat/page.tsx: confirmed titles, else what they typed.
+        programs = json.loads(a["program_list"]) if a.get("program_list") else None
+        if programs is not None:
+            programs = "; ".join(programs) or "Not sure, show me the top programs"
+        lines += ["- I'm at or committed to a specific school, comparing programs",
+                  f"- School: {a.get('school_matched_name') or a['school_name']}{school_id}",
+                  f"- Situation: {SITUATIONS[a['school_situation']]}",
+                  f"- Programs: {programs or a['programs']}"]
+        if a.get("switch_reason"):
+            lines.append(f"- Reason for switching: {a['switch_reason']}")
+        lines += [f"- What matters most: {a['program_priority']}", "",
                   "Compare programs at my school. Show school-specific earnings (Scorecard) and national occupation salary (BLS) "
                   "for each. Include career options, demand, and bright outlook. Full financial analysis."]
     else:

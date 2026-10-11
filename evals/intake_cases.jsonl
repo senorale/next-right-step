@@ -38,3 +38,4 @@
 {"id": "occupation-tech-sales", "key": "target_career", "value": "software sales", "answers": {"path_type": "path5"}, "expect": {"status": "confirm", "choice_codes_include": ["41-4011"]}}
 {"id": "occupation-software-account-executive", "key": "target_career", "value": "account executive at a software company", "answers": {"path_type": "path5"}, "expect": {"status": "confirm", "choice_codes_include": ["41-4011"]}}
 {"id": "occupation-customer-success", "key": "target_career", "value": "customer success manager", "answers": {"path_type": "path5"}, "expect": {"status": "confirm", "choice_codes_include": ["11-2022"]}}
+{"id": "programs-no-earnings", "key": "programs", "value": "economics and math", "answers": {"path_type": "path3", "school_id": "139755", "school_matched_name": "Georgia Institute of Technology-Main Campus"}, "expect": {"status": "fix", "choices_include": ["Continue with Mathematics"]}}

@@ -26,6 +26,19 @@ def path2(case_id: str, intake: dict, calls: list[dict], expect: dict) -> dict:
             "expect": {"allowed_metrics": allowed, **expect}}
 
 
+def path3(case_id: str, intake: dict, expect: dict) -> dict:
+    """A path3 case: the compare_programs call a correct agent makes; programs
+    are ranked by program_priority in code."""
+    intake = {"path_type": "path3", **intake}
+    return {"id": case_id, "intake": intake, "calls": [("compare_programs", {"school_id": int(intake["school_id"])})],
+            "expect": expect}
+
+
+UF = {"school_name": "UF", "school_id": "134130", "school_matched_name": "University of Florida"}
+GT = {"school_name": "Georgia Tech", "school_id": "139755", "school_matched_name": "Georgia Institute of Technology-Main Campus"}
+CS = "Computer and Information Sciences, General"
+NURSING = "Registered Nursing, Nursing Administration, Nursing Research and Clinical Nursing"
+
 CASES = [
     # required_figures: numbers the report's text must state (exact, or rounded for dollar amounts).
     {"id": "path1-lawyer-medians", "intake": {**PATH1, "occupation": "lawyer", "occupation_code": "23-1011"},
@@ -67,6 +80,21 @@ CASES = [
            "compare_metrics": "Net price / cost|Graduation rate", "rank_by": "Net price / cost"},
           [{"state": "CO", "sort_by": "net_price"}],
           {"min_options": ["school:", 3], "ranked_by": ["avg_net_price", "asc"]}),
+    path3("path3-cs-nursing",
+          {**UF, "school_situation": "deciding", "programs": "computer science, nursing",
+           "program_list": json.dumps([CS, NURSING]), "program_priority": "Earning potential"},
+          {"required_options": ["program:134130:1101:3", "program:134130:5138:3", "occ:15-1252", "occ:29-1141"],
+           "ranked_by": ["expected_salary", "desc", "program:"], "required_figures": [46429]}),
+    path3("path3-not-sure-career-options",
+          {**UF, "school_situation": "deciding", "programs": "not sure", "program_list": "[]",
+           "program_priority": "Many career options"},
+          {"min_options": ["program:", 3], "ranked_by": ["career_options", "desc", "program:"]}),
+    # Mathematics at Georgia Tech has no debt data: its cost is the national median for the field.
+    path3("path3-national-debt",
+          {**GT, "school_situation": "current", "programs": "math, CS",
+           "program_list": json.dumps(["Mathematics", CS]), "program_priority": "Earning potential"},
+          {"required_options": ["program:139755:2701:3", "program:139755:1101:3"],
+           "ranked_by": ["expected_salary", "desc", "program:"], "required_figures": [28529]}),
 ]
 
 
@@ -75,7 +103,7 @@ def main() -> None:
     for case in CASES:
         intake = case["intake"]
         # What the agent gets back from the calls a correct run makes.
-        tools = agent._dispatch_for(case.get("user_numbers") or {})
+        tools = agent._dispatch_for(case.get("user_numbers") or {}, intake)
         calls = case.get("calls") or [("compare_education_paths", {"occupation_code": intake["occupation_code"]})]
         data_blocks = [{"type": name, "data": tools[name](args)} for name, args in calls]
         for block in data_blocks:
@@ -83,7 +111,7 @@ def main() -> None:
                 raise SystemExit(f"{case['id']}: {block['data']['error']}")
         content, rows = agent.build_report_input(intake, data_blocks)
         lines.append(json.dumps({"id": case["id"], "report_input": content, "expect": case["expect"]}, default=str))
-        chosen = [r for r in rows if r["option_id"].startswith((f"occ:{intake.get('occupation_code')}", "school:"))]
+        chosen = [r for r in rows if r["option_id"].startswith((f"occ:{intake.get('occupation_code')}", "school:", "program:"))]
         print(case["id"], [(o["name"], o["years_in_school"], o["debt"], o["expected_salary"]) for o in chosen])
     (EVALS / "report_cases.jsonl").write_text("\n".join(lines) + "\n")
     print(f"wrote {len(lines)} cases")

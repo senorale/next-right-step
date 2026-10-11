@@ -18,11 +18,14 @@ report.METRIC_FORMATS), which the report can show as a table.
 import logging
 
 from career_cost import BACHELOR_SALARY, BACHELOR_YEARS, HS_SALARY, career_cost, career_option, national_bachelors_debt
+from db import cip_occupations, school_programs
 
 logger = logging.getLogger(__name__)
 
 MAX_OCCUPATION_ROWS = 3  # per search: the top matches with a salary
 MAX_PROGRAM_ROWS = 6  # per call: the highest-earning matches
+TOP_PROGRAMS = 4  # path3 "not sure": the school's top bachelor's programs
+PROGRAM_OCCUPATIONS = 3  # path3: occupations shown per program, highest paid first
 MAX_CANDIDATES = 20  # rows sent to the report model (pairwise gaps grow fast)
 
 AMOUNT_METRICS = ("avg_net_price", "tuition_in_state", "tuition_out_of_state", "median_debt",
@@ -31,6 +34,9 @@ RATE_METRICS = ("graduation_rate", "admission_rate", "retention_rate", "loan_rep
 SCHOOL_YEARS = {"certificate": 1, "associate": 2, "bachelor": 4, "graduate": 2}
 # Length of the program itself, by Scorecard credential level.
 PROGRAM_YEARS = {1: 1, 2: 2, 3: 4, 4: 1, 5: 2, 6: 5, 7: 4, 8: 1}
+# Total years of school by credential level, for the occupations a program
+# leads to (YEARS_BY_CREDENTIAL in src/app/api/schools/[id]/programs/route.ts).
+YEARS_BY_CREDENTIAL = {1: 1, 2: 2, 3: 4, 4: 5, 5: 6, 6: 8, 7: 8, 8: 6}
 
 
 # The user's own choices, enforced by code rather than left to the report model
@@ -56,6 +62,12 @@ RANK_ORDER = {
     "Retention rate": ("retention_rate", True),
     "Loan repayment rate": ("loan_repayment_rate_3yr", True),
 }
+# path3 program_priority -> (row field or metric, highest first). "Job demand"
+# (O*NET bright outlook) has no local data, so it isn't ranked in code.
+PRIORITY_ORDER = {
+    "Earning potential": ("expected_salary", True),
+    "Many career options": ("career_options", True),
+}
 
 
 def _choices(intake_answers: dict | None) -> list[str]:
@@ -74,15 +86,29 @@ def _value(row: dict, key: str):
     return row.get(key) if key in row else (row.get("metrics") or {}).get(key)
 
 
+def rank_order(intake_answers: dict | None) -> tuple[str, bool, str | None] | None:
+    """(row field or metric, highest first, option_id prefix of the rows
+    ranked) for the user's ranking choice, or None. path2 ranks by rank_by (the
+    only chosen metric counts as rank_by); path3 ranks programs by
+    program_priority, leaving the occupations they lead to in place."""
+    answers = intake_answers or {}
+    if answers.get("path_type") == "path3":
+        order = PRIORITY_ORDER.get(answers.get("program_priority"))
+        return (*order, "program:") if order else None
+    chosen = _choices(answers)
+    rank = answers.get("rank_by") or (chosen[0] if len(chosen) == 1 else None)
+    return (*RANK_ORDER[rank], None) if rank in RANK_ORDER else None
+
+
 def rank_rows(options: list[dict], intake_answers: dict | None) -> list[dict]:
-    """Orders the options that have the user's rank_by metric (the only chosen
-    metric counts as rank_by); others (baselines) keep their places."""
-    chosen = _choices(intake_answers)
-    rank = (intake_answers or {}).get("rank_by") or (chosen[0] if len(chosen) == 1 else None)
-    if rank not in RANK_ORDER:
+    """Orders the options that have the user's ranking metric (rank_order);
+    others (baselines) keep their places."""
+    order = rank_order(intake_answers)
+    if not order:
         return options
-    key, highest_first = RANK_ORDER[rank]
-    slots = [i for i, o in enumerate(options) if not o["option_id"].startswith("baseline:") and _value(o, key) is not None]
+    key, highest_first, prefix = order
+    slots = [i for i, o in enumerate(options) if not o["option_id"].startswith("baseline:")
+             and (prefix is None or o["option_id"].startswith(prefix)) and _value(o, key) is not None]
     ranked = sorted((options[i] for i in slots), key=lambda o: _value(o, key), reverse=highest_first)
     ordered = list(options)
     for i, row in zip(slots, ranked):
@@ -203,30 +229,102 @@ def school_rows(result: dict, degree_type: str | None) -> list[dict]:
     return rows
 
 
+def _program_row(p: dict, school_id, school: str) -> dict:
+    """One program at a school. Cost is the program's median debt (else the
+    national median for the field and credential); salary is its graduates'
+    earnings 4 years out (else 1 year)."""
+    salary = p.get("earnings_4yr_after_graduation") or p.get("earnings_1yr_after_graduation")
+    level = p.get("credential_level")
+    if p.get("median_debt"):
+        debt, basis = p["median_debt"], f"Median debt for this program at {school} (College Scorecard)"
+    elif p.get("national_median_debt"):
+        debt, basis = p["national_median_debt"], f"National median debt for a {p['credential'].lower()} in this field ({school} reports none)"
+    else:
+        debt, basis = 0, "No debt data for this program"
+    return {
+        "option_id": f"program:{school_id}:{p['cip_code']}:{level}",
+        "name": f"{p['title']} ({p['credential']})",
+        "short_label": p["title"],
+        "education": f"{p['credential']} at {school}",
+        "years_in_school": PROGRAM_YEARS.get(level, BACHELOR_YEARS),
+        "debt": debt,
+        "cost_basis": basis,
+        "expected_salary": salary,
+        "salary_basis": "College Scorecard median earnings of this program's graduates "
+        + ("4 years" if p.get("earnings_4yr_after_graduation") else "1 year") + " after graduating",
+        "metrics": {k: p.get(k) for k in ("earnings_1yr_after_graduation", "earnings_4yr_after_graduation")
+                    if p.get(k) is not None},
+    }
+
+
 def program_rows(result: dict) -> list[dict]:
-    """get_school_programs: the highest-earning programs. Cost is the program's
-    median debt; salary is its graduates' earnings 4 years out (else 1 year)."""
-    school_id, school = result.get("school_id"), result.get("school_name") or "this school"
-    rows = []
-    for p in (result.get("programs") or [])[:MAX_PROGRAM_ROWS]:
-        salary = p.get("earnings_4yr_after_graduation") or p.get("earnings_1yr_after_graduation")
-        level = p.get("credential_level")
-        rows.append({
-            "option_id": f"program:{school_id}:{p['cip_code']}:{level}",
-            "name": f"{p['title']} ({p['credential']})",
-            "short_label": p["title"],
-            "education": f"{p['credential']} at {school}",
-            "years_in_school": PROGRAM_YEARS.get(level, BACHELOR_YEARS),
-            "debt": p.get("median_debt") or 0,
-            "cost_basis": f"Median debt for this program at {school} (College Scorecard)" if p.get("median_debt")
-            else "No debt data for this program",
-            "expected_salary": salary,
-            "salary_basis": f"College Scorecard median earnings of this program's graduates "
-            + ("4 years" if p.get("earnings_4yr_after_graduation") else "1 year") + " after graduating",
-            "metrics": {k: p.get(k) for k in ("earnings_1yr_after_graduation", "earnings_4yr_after_graduation")
-                        if p.get(k) is not None},
-        })
-    return rows
+    """get_school_programs: the highest-earning programs."""
+    school = result.get("school_name") or "this school"
+    return [_program_row(p, result.get("school_id"), school) for p in (result.get("programs") or [])[:MAX_PROGRAM_ROWS]]
+
+
+def _has_earnings(p: dict) -> bool:
+    return bool(p.get("earnings_4yr_after_graduation") or p.get("earnings_1yr_after_graduation"))
+
+
+def _reachable(occupations: list[dict], level: int) -> list[dict]:
+    """Occupations a graduate of this credential can typically enter (typical
+    years of school within the credential's), one per SOC code."""
+    years = YEARS_BY_CREDENTIAL.get(level)
+    seen, out = set(), []
+    for o in occupations:
+        if o["soc_code"] in seen or (years is not None and (o.get("typical_years_of_school") or 0) > years):
+            continue
+        seen.add(o["soc_code"])
+        out.append(o)
+    return out
+
+
+def path3_options(school_id: int, program_titles: list[str] | None, program_priority: str | None = None) -> dict:
+    """compare_programs: the programs the user confirmed at their school (else
+    the school's top bachelor's programs), each at its lowest credential with
+    earnings data, and the occupations each leads to (CIP-SOC crosswalk) as
+    occupation rows. The intake turns away programs without earnings."""
+    result = school_programs(school_id)
+    if "error" in result:
+        return result
+    school = result["school_name"] or "this school"
+    programs = result["programs"]
+    chosen = []
+    if program_titles:
+        for title in dict.fromkeys(program_titles):
+            levels = [p for p in programs if p["title"].lower() == title.lower() and _has_earnings(p)]
+            if levels:
+                chosen.append(min(levels, key=lambda p: p["credential_level"]))
+    else:
+        chosen = [p for p in programs if p["credential_level"] == 3 and _has_earnings(p)]
+
+    linked = cip_occupations(sorted({p["cip_code"] for p in chosen}))
+    rows, occupation_rows_by_id = [], {}
+    for p in chosen:
+        row = _program_row(p, school_id, school)
+        reachable = _reachable(linked.get(p["cip_code"], []), p["credential_level"])
+        row["metrics"]["career_options"] = len(reachable)
+        row["leads_to"] = []
+        for o in reachable[:PROGRAM_OCCUPATIONS]:
+            occ_id = f"occ:{o['soc_code']}"
+            if occ_id not in occupation_rows_by_id:
+                cost = career_cost(o["soc_code"])
+                if not cost:
+                    continue
+                occupation_rows_by_id[occ_id] = career_option(cost)
+            row["leads_to"].append(occ_id)
+        rows.append(row)
+
+    if not program_titles:
+        # "Not sure": the top programs by what matters most to the user.
+        key, _, _ = rank_order({"path_type": "path3", "program_priority": program_priority}) or ("expected_salary", True, None)
+        rows = sorted(rows, key=lambda r: _value(r, key) or 0, reverse=True)[:TOP_PROGRAMS]
+        keep = {i for r in rows for i in r["leads_to"]}
+        occupation_rows_by_id = {k: v for k, v in occupation_rows_by_id.items() if k in keep}
+
+    return {"school_id": school_id, "school_name": result["school_name"],
+            "options": rows + list(occupation_rows_by_id.values())}
 
 
 def with_rows(tool_name: str, args: dict, result):
@@ -248,8 +346,11 @@ def candidate_rows(intake_answers: dict | None, data_blocks: list[dict]) -> list
     order gathered. A later row with the same option_id replaces an earlier one
     (e.g. compare_education_paths' version of an occupation, with its gaps)."""
     by_id: dict[str, dict] = {}
-    for row in baseline_rows(intake_answers):
-        by_id[row["option_id"]] = row
+    # path3 compares programs with each other and with the occupations they
+    # lead to; the report cited baseline gaps without showing the baselines.
+    if (intake_answers or {}).get("path_type") != "path3":
+        for row in baseline_rows(intake_answers):
+            by_id[row["option_id"]] = row
     for block in data_blocks:
         data = block.get("data")
         for row in (data.get("options") or []) if isinstance(data, dict) else []:

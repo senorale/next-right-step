@@ -28,7 +28,7 @@ from db import (
     search_occupations,
 )
 from career_cost import path1_options
-from options import allowed_metrics, candidate_rows, pairwise_gaps, with_rows
+from options import allowed_metrics, candidate_rows, pairwise_gaps, path3_options, with_rows
 from user_numbers import extract_user_numbers
 from report import REPORT_PROMPT, render_report, report_schema
 
@@ -208,6 +208,20 @@ TOOLS = [
             "required": ["occupation_code"],
         },
     },
+    {
+        "name": "compare_programs",
+        "description": "Compare programs at one school. Returns rows for the programs the user confirmed in intake (or the school's top programs if they weren't sure): graduates' earnings and median debt, and the occupations each program leads to with BLS median salary. All figures are computed; use them as given. Requires the school_id from intake or search_schools.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "school_id": {
+                    "type": "integer",
+                    "description": "The school's College Scorecard ID",
+                }
+            },
+            "required": ["school_id"],
+        },
+    },
 ]
 
 # The same tools in the OpenAI function-calling format.
@@ -221,6 +235,7 @@ _TOOL_PROGRESS = {
     "search_schools": "Looking up schools…",
     "get_school_programs": "Pulling program earnings…",
     "compare_education_paths": "Comparing education paths…",
+    "compare_programs": "Comparing programs…",
 }
 
 TOOL_DISPATCH = {
@@ -241,25 +256,46 @@ def _compare_education_paths(occupation_code: str, user_numbers: dict) -> dict:
     return {"occupation_code": occupation_code, "options": options}
 
 
-def _dispatch_for(user_numbers: dict) -> dict:
+def _program_list(intake_answers: dict) -> list[str] | None:
+    """The program titles the user confirmed (path3); [] = not sure, None = none confirmed."""
+    try:
+        programs = json.loads(intake_answers.get("program_list") or "null")
+    except json.JSONDecodeError:
+        return None
+    return [p for p in programs if isinstance(p, str)] if isinstance(programs, list) else None
+
+
+def _compare_programs(school_id, intake_answers: dict) -> dict:
+    # The confirmed school wins over the model's argument.
+    confirmed = str(intake_answers.get("school_id") or "")
+    school_id = int(confirmed) if confirmed.isdigit() else int(school_id)
+    result = path3_options(school_id, _program_list(intake_answers), intake_answers.get("program_priority"))
+    if "error" not in result and not any(o["option_id"].startswith("program:") for o in result["options"]):
+        return {"error": f"No program earnings data at school_id {school_id}", **result}
+    return result
+
+
+def _dispatch_for(user_numbers: dict, intake_answers: dict | None = None) -> dict:
     """Tool functions for one run. Each result carries its option rows
-    (options.py). compare_education_paths takes the user's numbers from intake,
-    not from the model, so the model never copies them."""
+    (options.py). compare_education_paths and compare_programs take the user's
+    numbers and programs from intake, not from the model, so the model never
+    copies them."""
     tools = {
         **TOOL_DISPATCH,
         "compare_education_paths": lambda args: _compare_education_paths(args["occupation_code"], user_numbers),
+        "compare_programs": lambda args: _compare_programs(args["school_id"], intake_answers or {}),
     }
     return {name: (lambda args, name=name, func=func: with_rows(name, args, func(args))) for name, func in tools.items()}
 
 
 SYSTEM_PROMPT = """You gather data for a college and career report; a separate step writes it. Tool results include "options": rows the report can compare. Gather the ones this person's question needs. Call independent tools together; if a search finds nothing, try other keywords. When done, reply with one short sentence.
 
-The user confirmed the occupations (with SOC codes), schools (with school_id), and programs in their intake. Use exactly those: search an occupation by its confirmed title and take the result with that SOC code, and pass a confirmed school_id straight to get_school_programs.
+The user confirmed the occupations (with SOC codes), schools (with school_id), and programs in their intake. Use exactly those: search an occupation by its confirmed title and take the result with that SOC code, and pass a confirmed school_id straight to the tool that takes it.
 
 Questions by intake path_type:
 - path1: college vs a trade vs working now, for their occupation (use occupation_code from intake when present).
 - path2: how the schools they named, or schools in their location, compare.
-- path3: how the programs they named at their school compare, and the occupations they lead to.
+- path3: call compare_programs with the school_id from intake; it returns the programs they confirmed and the occupations each leads to. Nothing else is needed.
 - path4: how the careers they named compare, with their current job unless compare_to_current is "no".
 - path5: how to get from their current role to their target career.
 """
@@ -423,7 +459,16 @@ async def generate_report(
     return report
 
 
-async def _call_model(messages: list[dict]):
+def _tools_for(intake_answers: dict | None, first_turn: bool) -> list[dict]:
+    """Tools the model may call. The first path3 turn, with confirmed programs,
+    needs only compare_programs; with other tools on offer, the model went
+    looking for programs that have no earnings data. Follow-ups get every tool."""
+    if first_turn and (intake_answers or {}).get("path_type") == "path3" and _program_list(intake_answers) is not None:
+        return [t for t in OPENAI_TOOLS if t["function"]["name"] == "compare_programs"]
+    return OPENAI_TOOLS
+
+
+async def _call_model(messages: list[dict], tools: list[dict] = OPENAI_TOOLS):
     """
     Call the model with one retry on transient errors.
     Retriable: rate limit, connection error, 5xx. Non-retriable errors
@@ -436,7 +481,7 @@ async def _call_model(messages: list[dict]):
                 model=MODEL,
                 max_tokens=1024,
                 messages=[{"role": "system", "content": SYSTEM_PROMPT}, *messages],
-                tools=OPENAI_TOOLS,
+                tools=tools,
             )
         except (openai.APIConnectionError, openai.RateLimitError) as exc:
             last_exc = exc
@@ -467,6 +512,7 @@ async def run_agent_stream(
       {"event": "complete", "response": "...", "report_html": "...", "conversation_history": [...]}
     """
     messages = list(conversation_history) if conversation_history else []
+    tools = _tools_for(intake_answers, first_turn=not messages)
     messages.append({"role": "user", "content": user_message})
     messages = _trim_history(messages)
     data_blocks: list[dict] = []
@@ -485,14 +531,14 @@ async def run_agent_stream(
 
     text_response: str | None = None
     agent_calls = 0
-    dispatch = _dispatch_for(await resolve_user_numbers(intake_answers))
+    dispatch = _dispatch_for(await resolve_user_numbers(intake_answers), intake_answers)
 
     for iteration in range(MAX_TOOL_ITERATIONS):
         agent_calls = iteration + 1
         try:
             yield gathering("Understanding your question…" if iteration == 0 else "Reviewing what I found…")
             t0 = time.perf_counter()
-            response = await _call_model(messages)
+            response = await _call_model(messages, tools)
             llm_total += time.perf_counter() - t0
             gather_steps += 1
         except openai.APIError as exc:
