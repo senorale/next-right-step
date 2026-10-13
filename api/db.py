@@ -275,6 +275,7 @@ _SCHOOL_SORT = {
     "loan_repayment": ("repayment_rate_3yr", True),
 }
 
+MIN_GRADUATION_RATE = 0.70
 MAX_SCHOOL_RESULTS = 5
 
 
@@ -357,14 +358,15 @@ def _query_local_schools(
     sort_by: str | None,
     degree: int | None,
 ) -> list[dict]:
-    # Browsing (by state) keeps to schools with full data. A school the user
-    # names is always found; callers check its data.
+    # Browsing (by state) keeps to schools with full data, and to those with a
+    # 70%+ graduation rate when enough of them match. A school the user names is
+    # always found; callers check its data.
     where = [] if name else [
         "median_debt IS NOT NULL",
         "earnings_10yr IS NOT NULL",
         "avg_net_price IS NOT NULL",
     ]
-    params: dict = {"limit": MAX_SCHOOL_RESULTS}
+    params: dict = {"limit": MAX_SCHOOL_RESULTS, "min_grad": MIN_GRADUATION_RATE}
     if name:
         where.append("name ILIKE :name")
         params["name"] = f"%{name}%"
@@ -389,12 +391,19 @@ def _query_local_schools(
     else:
         order = '"student_size" DESC NULLS LAST, "name" ASC'
 
-    with _connect_with_retry() as conn:
+    def select(conditions: list[str]) -> list[dict]:
         rows = conn.execute(
-            text(f'SELECT * FROM "School" WHERE {" AND ".join(where)} ORDER BY {order} LIMIT :limit'),
+            text(f'SELECT * FROM "School" WHERE {" AND ".join(conditions)} ORDER BY {order} LIMIT :limit'),
             params,
         )
         return [dict(r._mapping) for r in rows]
+
+    with _connect_with_retry() as conn:
+        if not name:
+            graduating = select(where + ["graduation_rate >= :min_grad"])
+            if len(graduating) == MAX_SCHOOL_RESULTS:
+                return graduating
+        return select(where)
 
 
 def _school_result(s: dict) -> dict:
