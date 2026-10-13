@@ -275,7 +275,6 @@ _SCHOOL_SORT = {
     "loan_repayment": ("repayment_rate_3yr", True),
 }
 
-MIN_GRADUATION_RATE = 0.70
 MAX_SCHOOL_RESULTS = 5
 
 
@@ -358,15 +357,14 @@ def _query_local_schools(
     sort_by: str | None,
     degree: int | None,
 ) -> list[dict]:
-    # Browsing (by state) keeps to schools with a 70%+ graduation rate and full
-    # data. A school the user names is always found; callers check its data.
+    # Browsing (by state) keeps to schools with full data. A school the user
+    # names is always found; callers check its data.
     where = [] if name else [
-        "graduation_rate >= :min_grad",
         "median_debt IS NOT NULL",
         "earnings_10yr IS NOT NULL",
         "avg_net_price IS NOT NULL",
     ]
-    params: dict = {"min_grad": MIN_GRADUATION_RATE, "limit": MAX_SCHOOL_RESULTS}
+    params: dict = {"limit": MAX_SCHOOL_RESULTS}
     if name:
         where.append("name ILIKE :name")
         params["name"] = f"%{name}%"
