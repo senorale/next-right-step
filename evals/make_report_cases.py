@@ -34,6 +34,19 @@ def path3(case_id: str, intake: dict, expect: dict) -> dict:
             "expect": expect}
 
 
+def path4(case_id: str, intake: dict, careers: list[tuple[str, str, str]], expect: dict) -> dict:
+    """A path4 case: the compare_careers call a correct agent makes. careers are
+    (typed, soc_code, title), as career_matches stores them."""
+    intake = {"path_type": "path4", "careers_to_compare": ", ".join(t for t, _, _ in careers),
+              "career_matches": json.dumps([{"typed": t, "soc_code": c, "title": n} for t, c, n in careers]), **intake}
+    return {"id": case_id, "intake": intake, "calls": [("compare_careers", {})], "expect": expect}
+
+
+NO_JOB = {"include_current_role": "no"}
+RETAIL_MANAGER = {"include_current_role": "yes", "current_role": "retail store manager", "current_role_code": "41-1011",
+                  "current_role_title": "First-Line Supervisors of Retail Sales Workers"}
+ELECTRICIAN = ("electrician", "47-2111", "Electricians")
+
 UF = {"school_name": "UF", "school_id": "134130", "school_matched_name": "University of Florida"}
 GT = {"school_name": "Georgia Tech", "school_id": "139755", "school_matched_name": "Georgia Institute of Technology-Main Campus"}
 CS = "Computer and Information Sciences, General"
@@ -95,6 +108,14 @@ CASES = [
            "program_list": json.dumps(["Mathematics", CS]), "program_priority": "Earning potential"},
           {"required_options": ["program:139755:2701:3", "program:139755:1101:3"],
            "ranked_by": ["expected_salary", "desc", "program:"], "required_figures": [28529]}),
+    path4("path4-trade-vs-law", NO_JOB, [ELECTRICIAN, ("lawyer", "23-1011", "Lawyers")],
+          {"required_options": ["occ:47-2111", "occ:23-1011", "baseline:hs"]}),
+    path4("path4-three-careers", NO_JOB,
+          [("registered nurse", "29-1141", "Registered Nurses"), ("pharmacist", "29-1051", "Pharmacists"),
+           ("software developer", "15-1252", "Software Developers")],
+          {"required_options": ["occ:29-1141", "occ:29-1051", "occ:15-1252", "baseline:hs"]}),
+    path4("path4-current-job", RETAIL_MANAGER, [ELECTRICIAN],
+          {"required_options": ["occ:47-2111", "occ:41-1011", "baseline:hs"]}),
 ]
 
 
@@ -111,7 +132,8 @@ def main() -> None:
                 raise SystemExit(f"{case['id']}: {block['data']['error']}")
         content, rows = agent.build_report_input(intake, data_blocks)
         lines.append(json.dumps({"id": case["id"], "report_input": content, "expect": case["expect"]}, default=str))
-        chosen = [r for r in rows if r["option_id"].startswith((f"occ:{intake.get('occupation_code')}", "school:", "program:"))]
+        shown = (f"occ:{intake.get('occupation_code')}", "school:", "program:") + (("occ:", "baseline:") if intake["path_type"] == "path4" else ())
+        chosen = [r for r in rows if r["option_id"].startswith(shown)]
         print(case["id"], [(o["name"], o["years_in_school"], o["debt"], o["expected_salary"]) for o in chosen])
     (EVALS / "report_cases.jsonl").write_text("\n".join(lines) + "\n")
     print(f"wrote {len(lines)} cases")
