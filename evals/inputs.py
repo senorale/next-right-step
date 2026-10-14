@@ -69,6 +69,11 @@ def check(content: dict, fixed: list[dict] | None, data_blocks: list[dict], inta
         # Rows the user named (e.g. their schools) must reach the report.
         results["named_options"] = [f"missing {i}" for i in expect["option_ids"] if i not in ids]
 
+    if "exact_option_ids" in expect:
+        # Rows built in code (path4): exactly these reach the report, nothing a search dragged in.
+        want = expect["exact_option_ids"]
+        results["exact_options"] = [f"missing {i}" for i in want if i not in ids] + [f"extra {i}" for i in ids if i not in want]
+
     if "school_states" in expect:
         # Exploring by location: every school found is in a requested state, and there are enough to compare.
         want = expect["school_states"]

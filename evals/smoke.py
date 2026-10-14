@@ -80,7 +80,8 @@ def chat_message(a: dict) -> str:
             target = with_soc(a.get("target_career_title") or a["target_career"], a.get("target_career_code"))
             lines += ["- I have a specific career in mind", f"- Target career: {target}"]
         # startingPointLines in src/app/chat/page.tsx
-        lines.append(f"- Current position: {POSITIONS[a['current_position']]}")
+        if a.get("current_position"):
+            lines.append(f"- Current position: {POSITIONS[a['current_position']]}")
         if a.get("education_level"):
             lines.append(f"- Highest education: {LEVELS[a['education_level']]}")
         if a.get("current_field"):
