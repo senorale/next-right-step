@@ -115,7 +115,7 @@ def summarize(runs: list[dict]) -> dict:
         "prompt_chars": {
             "agent_system": len(agent.SYSTEM_PROMPT),
             "agent_tools": len(json.dumps(agent.TOOLS)),
-            "report_system": len(report.REPORT_SPEC_SYSTEM_PROMPT),
+            "report_system": len(report.REPORT_PROMPT),
         },
         "pass_rate": {n: round(sum(r["checks"][n]["pass"] for r in runs) / len(runs), 2) for n in names},
         "all_pass_rate": round(sum(all(c["pass"] for c in r["checks"].values()) for r in runs) / len(runs), 2),
