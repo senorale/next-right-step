@@ -174,12 +174,35 @@ const PROGRAM_PRIORITY_STEP: IntakeStep = {
   placeholder: "",
 }
 
-// Path 4: Compare career tracks
-const CAREERS_TO_COMPARE_STEP: IntakeStep = {
-  key: 'careers_to_compare',
-  question: "What careers or fields do you want to compare?",
-  subtitle: "List two or more, separated by commas.",
-  placeholder: "e.g. pharmacist, software developer, nurse practitioner...",
+// Path 4: Compare career tracks. The current job comes first, so the careers
+// step knows whether one career is enough.
+const INCLUDE_CURRENT_ROLE_STEP: IntakeStep = {
+  key: 'include_current_role',
+  question: "Should I include your current job in the comparison?",
+  subtitle: "It's compared at the national median salary for that job.",
+  options: [
+    { value: 'yes', label: "Yes, include my current job" },
+    { value: 'no', label: "No, just compare careers" },
+  ],
+  placeholder: "",
+}
+
+const PATH4_CURRENT_ROLE_STEP: IntakeStep = {
+  key: 'current_role',
+  question: "What's your current job?",
+  subtitle: "I'll compare it with the careers you name.",
+  placeholder: "e.g. retail manager, medical assistant, IT support...",
+}
+
+function getCareersToCompareStep(answers: Record<string, string>): IntakeStep {
+  return {
+    key: 'careers_to_compare',
+    question: "What careers or fields do you want to compare?",
+    subtitle: answers.include_current_role === 'yes'
+      ? "List one or more, separated by commas. No need to repeat your current job."
+      : "List two or more, separated by commas.",
+    placeholder: "e.g. pharmacist, software developer, nurse practitioner...",
+  }
 }
 
 // Path 5: Path to a specific career
@@ -242,37 +265,7 @@ function getCurrentFieldStep(answers: Record<string, string>): IntakeStep | null
   }
 }
 
-// Path 4, working users: compare against the current job, or only the named careers to each other.
-const COMPARE_TO_CURRENT_STEP: IntakeStep = {
-  key: 'compare_to_current',
-  question: "Should I include your current job in the comparison?",
-  subtitle: "Or just compare these careers to each other.",
-  options: [
-    { value: 'yes', label: "Yes, compare them against my current job" },
-    { value: 'no', label: "No, just compare these careers to each other" },
-  ],
-  placeholder: "",
-}
-
-const PAYOFF_BASELINE_STEP: IntakeStep = {
-  key: 'payoff_baseline',
-  question: "What should the payoff be measured against?",
-  subtitle: "Payoff counts the pay you give up while in school and how much more you earn after.",
-  options: [
-    { value: 'hs', label: "A high school diploma (national median)" },
-    { value: 'salary', label: "My current salary" },
-  ],
-  placeholder: "",
-}
-
-const CURRENT_SALARY_STEP: IntakeStep = {
-  key: 'current_salary',
-  question: "What's your yearly salary?",
-  subtitle: "Used only to measure the payoff, not shown as a career in the comparison.",
-  placeholder: "e.g. $55,000",
-}
-
-/** Starting-point questions shared by path4 and path5, in order. */
+/** Starting-point questions for path5, in order. */
 function getStartingPointStep(answers: Record<string, string>): IntakeStep | null {
   const keys = Object.keys(answers)
   if (!keys.includes('current_position')) return CURRENT_POSITION_STEP
@@ -280,14 +273,6 @@ function getStartingPointStep(answers: Record<string, string>): IntakeStep | nul
   const fieldStep = getCurrentFieldStep(answers)
   if (fieldStep && !keys.includes('current_field')) return fieldStep
   if (answers.current_position !== 'working') return null
-  if (getPathKey(answers) === 'path4') {
-    if (!keys.includes('compare_to_current')) return COMPARE_TO_CURRENT_STEP
-    if (answers.compare_to_current === 'no') {
-      if (!keys.includes('payoff_baseline')) return PAYOFF_BASELINE_STEP
-      if (answers.payoff_baseline === 'salary' && !keys.includes('current_salary')) return CURRENT_SALARY_STEP
-      return null
-    }
-  }
   if (!keys.includes('current_role')) return CURRENT_ROLE_STEP
   return null
 }
@@ -299,8 +284,7 @@ function countStartingPointSteps(answers: Record<string, string>): number {
   if (pos !== 'working' && pos !== 'looking_for_work') return 1
   const level = answers.education_level
   const hasField = !level || !!EDUCATION_LEVELS.find((l) => l.value === level)?.hasField
-  const comparesToCurrent = getPathKey(answers) === 'path4' && pos === 'working' ? 1 : 0
-  return 2 + (hasField ? 1 : 0) + (pos === 'working' ? 1 : 0) + comparesToCurrent
+  return 2 + (hasField ? 1 : 0) + (pos === 'working' ? 1 : 0)
 }
 
 function getRankByStep(answers: Record<string, string>): IntakeStep {
@@ -409,8 +393,10 @@ function getNextStep(answers: Record<string, string>): IntakeStep | null {
   }
 
   if (path === 'path4') {
-    if (!keys.includes('careers_to_compare')) return CAREERS_TO_COMPARE_STEP
-    return getStartingPointStep(answers)
+    if (!keys.includes('include_current_role')) return INCLUDE_CURRENT_ROLE_STEP
+    if (answers.include_current_role === 'yes' && !keys.includes('current_role')) return PATH4_CURRENT_ROLE_STEP
+    if (!keys.includes('careers_to_compare')) return getCareersToCompareStep(answers)
+    return null
   }
 
   if (path === 'path5') {
@@ -434,7 +420,10 @@ function estimateTotalSteps(answers: Record<string, string>): number {
   if (path === 'path3') {
     return answers.school_situation === 'switching' ? 6 : 5
   }
-  if (path === 'path4' || path === 'path5') {
+  if (path === 'path4') {
+    return answers.include_current_role === 'yes' ? 4 : 3
+  }
+  if (path === 'path5') {
     return 2 + countStartingPointSteps(answers)
   }
   return 5
@@ -480,7 +469,7 @@ interface IntakeCheck {
  * at a time, then the whole list to confirm. Everything was fetched in one
  * call, so this makes no requests.
  */
-function pickView(check: IntakeCheck, picked: Record<number, PickEntry>): IntakeCheck {
+function pickView(check: IntakeCheck, picked: Record<number, PickEntry>, answers: Record<string, string>): IntakeCheck {
   const { key, items } = check.picks!
   const index = items.findIndex((item, i) => !item.match && !picked[i])
   if (index >= 0) {
@@ -490,10 +479,15 @@ function pickView(check: IntakeCheck, picked: Record<number, PickEntry>): Intake
       choices: (items[index].options ?? []).map(({ label, entry }) => ({ label, pick: { index, entry } })),
     }
   }
-  const entries = items.map((item, i) => item.match ?? picked[i])
+  // With the current job included, one other career is enough, and a pick that is the job is dropped.
+  const currentCode = answers.include_current_role === 'yes' ? answers.current_role_code : undefined
+  const entries = items.map((item, i) => item.match ?? picked[i]).filter((e) => e.soc_code !== currentCode)
   const unique = entries.filter((e, i) => entries.findIndex((o) => o.soc_code === e.soc_code) === i)
-  if (unique.length < 2) {
-    return { status: 'confirm', message: `Those all match ${unique[0].title}. Name at least two different careers.`, choices: [] }
+  if (unique.length < (currentCode ? 1 : 2)) {
+    const message = unique.length
+      ? `Those all match ${unique[0].title}. Name at least two different careers.`
+      : "That's your current job. Name at least one other career."
+    return { status: 'confirm', message, choices: [] }
   }
   return {
     status: 'confirm',
@@ -514,7 +508,6 @@ const DERIVED_KEYS: Record<string, string[]> = {
   target_career: ['target_career_code', 'target_career_title'],
   current_field: ['current_field_normalized'],
   current_role: ['current_role_code', 'current_role_title'],
-  current_salary: ['current_salary_value'],
 }
 const HIDDEN_KEYS = new Set(Object.values(DERIVED_KEYS).flat())
 
@@ -530,7 +523,6 @@ const CHECKING_MESSAGES: Record<string, string> = {
   target_location: 'Finding those places…',
   specific_numbers: 'Reading your numbers…',
   current_field: 'Reading your field of study…',
-  current_salary: 'Reading your salary…',
 }
 
 function CheckingStatus({ stepKey }: { stepKey: string }) {
@@ -713,7 +705,7 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
 
   // While the user confirms how an answer was read, they work with the
   // choices only; "Let me edit" brings the input box back.
-  const shown = check?.picks ? pickView(check, picked) : check
+  const shown = check?.picks ? pickView(check, picked, answers) : check
   const confirming = shown?.status === 'confirm' || resolving
   // "Let me edit" sits next to the question, not among the answers to it.
   const choices = (shown?.choices ?? []).filter((c) => !c.edit)
@@ -1231,16 +1223,12 @@ function startingPointLines(answers: Record<string, string>): string[] {
   const level = EDUCATION_LEVELS.find((l) => l.value === answers.education_level)
   if (level) lines.push(`- Highest education: ${level.label}`)
   if (answers.current_field) lines.push(`- Field of study: ${answers.current_field_normalized ?? answers.current_field}`)
-  if (answers.current_role) lines.push(`- Current job: ${withSoc(answers.current_role_title ?? answers.current_role, answers.current_role_code)}`)
-  if (answers.compare_to_current === 'no') {
-    lines.push('- Compare only these careers to each other, not to my current job')
-    if (answers.payoff_baseline === 'salary' && answers.current_salary_value) {
-      lines.push(`- Measure payoff against my current salary of $${Number(answers.current_salary_value).toLocaleString()}`)
-    } else {
-      lines.push('- Measure payoff against a high school diploma (national median)')
-    }
-  }
+  if (answers.current_role) lines.push(`- Current job: ${currentJob(answers)}`)
   return lines
+}
+
+function currentJob(answers: Record<string, string>): string {
+  return withSoc(answers.current_role_title ?? answers.current_role, answers.current_role_code)
 }
 
 function withSoc(title: string, code?: string): string {
@@ -1331,9 +1319,11 @@ function buildPrompt(answers: Record<string, string>): string {
   if (path === 'path4') {
     lines.push(`- I want to compare career paths side by side`)
     if (answers.careers_to_compare) lines.push(`- Careers to compare: ${careersLine(answers)}`)
-    lines.push(...startingPointLines(answers))
+    if (answers.include_current_role === 'yes' && answers.current_role) {
+      lines.push(`- Include my current job: ${currentJob(answers)}`)
+    }
     lines.push('')
-    lines.push('Compare each career path: education required, timeline, cost, salary, bright outlook, payoff timeline. Full financial analysis for all paths.')
+    lines.push('Compare each career path: education required, timeline, cost, salary, payoff timeline. Full financial analysis for all paths.')
   }
 
   if (path === 'path5') {

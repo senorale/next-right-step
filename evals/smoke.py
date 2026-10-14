@@ -42,6 +42,11 @@ def with_soc(title: str, code: str | None) -> str:
     return f"{title} (SOC {code})" if code else title
 
 
+def current_job(a: dict) -> str:
+    """currentJob in src/app/chat/page.tsx."""
+    return with_soc(a.get("current_role_title") or a["current_role"], a.get("current_role_code"))
+
+
 def chat_message(a: dict) -> str:
     """First chat message, same shape as buildPrompt in src/app/chat/page.tsx."""
     path = a["path_type"]
@@ -70,15 +75,18 @@ def chat_message(a: dict) -> str:
         lines += [f"- What matters most: {a['program_priority']}", "",
                   "Compare programs at my school. Show school-specific earnings (Scorecard) and national occupation salary (BLS) "
                   "for each. Include career options, demand, and bright outlook. Full financial analysis."]
+    elif path == "path4":
+        # careersLine in src/app/chat/page.tsx: confirmed careers with SOC codes, else what they typed.
+        matches = json.loads(a["career_matches"]) if a.get("career_matches") else None
+        careers = ", ".join(with_soc(m["title"], m["soc_code"]) for m in matches) if matches else a["careers_to_compare"]
+        lines += ["- I want to compare career paths side by side", f"- Careers to compare: {careers}"]
+        if a.get("include_current_role") == "yes" and a.get("current_role"):
+            lines.append(f"- Include my current job: {current_job(a)}")
+        lines += ["", "Compare each career path: education required, timeline, cost, salary, payoff timeline. "
+                  "Full financial analysis for all paths."]
     else:
-        if path == "path4":
-            # careersLine in src/app/chat/page.tsx: confirmed careers with SOC codes, else what they typed.
-            matches = json.loads(a["career_matches"]) if a.get("career_matches") else None
-            careers = ", ".join(with_soc(m["title"], m["soc_code"]) for m in matches) if matches else a["careers_to_compare"]
-            lines += ["- I want to compare career paths side by side", f"- Careers to compare: {careers}"]
-        else:
-            target = with_soc(a.get("target_career_title") or a["target_career"], a.get("target_career_code"))
-            lines += ["- I have a specific career in mind", f"- Target career: {target}"]
+        target = with_soc(a.get("target_career_title") or a["target_career"], a.get("target_career_code"))
+        lines += ["- I have a specific career in mind", f"- Target career: {target}"]
         # startingPointLines in src/app/chat/page.tsx
         if a.get("current_position"):
             lines.append(f"- Current position: {POSITIONS[a['current_position']]}")
@@ -87,16 +95,8 @@ def chat_message(a: dict) -> str:
         if a.get("current_field"):
             lines.append(f"- Field of study: {a.get('current_field_normalized') or a['current_field']}")
         if a.get("current_role"):
-            lines.append(f"- Current job: {with_soc(a.get('current_role_title') or a['current_role'], a.get('current_role_code'))}")
-        if a.get("compare_to_current") == "no":
-            lines.append("- Compare only these careers to each other, not to my current job")
-            if a.get("payoff_baseline") == "salary" and a.get("current_salary_value"):
-                lines.append(f"- Measure payoff against my current salary of ${int(a['current_salary_value']):,}")
-            else:
-                lines.append("- Measure payoff against a high school diploma (national median)")
-        lines += ["", "Compare each career path: education required, timeline, cost, salary, bright outlook, payoff timeline. "
-                  "Full financial analysis for all paths." if path == "path4" else
-                  "Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected "
+            lines.append(f"- Current job: {current_job(a)}")
+        lines += ["", "Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected "
                   "salary, time to recoup. Show gap analysis if I have relevant education."]
     return "\n".join(lines)
 

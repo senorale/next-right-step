@@ -221,7 +221,8 @@ async def validate_target_career(value: str, answers: dict) -> dict:
 
 async def validate_current_role(value: str, answers: dict) -> dict:
     """The user's current job (path4 and path5), matched like any occupation.
-    Only a role with no match at all is kept as typed."""
+    On path5 a role with no match at all is kept as typed; on path4 it is a
+    row in the comparison, so it needs salary data like any career."""
     keys = ("current_role_code", "current_role_title")
     named = await extract_occupations(value)
     if named is None:
@@ -240,6 +241,8 @@ async def validate_current_role(value: str, answers: dict) -> dict:
     if match:
         return _confirm(f"Your current job: {match['title']} ({_salary(match)}).", _occupation_set(match, keys))
     if not candidates:
+        if answers.get("path_type") == "path4":
+            return {"status": "fix", "message": f"I couldn't find salary data for \"{name}\". Try another name for your job."}
         return _confirm(f"Your current job: {name}.", {"current_role_title": name})
     return {
         "status": "confirm",
@@ -253,13 +256,18 @@ async def validate_careers_to_compare(value: str, answers: dict) -> dict:
     lookups in parallel). When some are unclear, "picks" carries every career:
     the match, or the candidates to pick from. The frontend asks about the
     unclear ones one at a time, confirms the whole list, and stores
-    career_matches, with no further calls."""
+    career_matches, with no further calls. With the current job included, one
+    career is enough, and a career that matches the job is dropped."""
+    current = answers.get("current_role_code") if answers.get("include_current_role") == "yes" else None
+    needed = 1 if current else 2
+    ask = ("Name at least one career to compare with your current job." if current
+           else "Name at least two careers to compare, separated by commas.")
     named = await extract_occupations(value)
     if named is None:
         named = _as_named(_split(value))
     names = [n["typed"] for n in named]
-    if len(names) < 2:
-        return {"status": "fix", "message": "Name at least two careers to compare, separated by commas."}
+    if len(names) < needed:
+        return {"status": "fix", "message": ask}
     found = await asyncio.gather(*(asyncio.to_thread(match_occupation, n) for n in named))
 
     def entry(typed: str, result: dict) -> dict:
@@ -267,6 +275,8 @@ async def validate_careers_to_compare(value: str, answers: dict) -> dict:
 
     items = []
     for name, (match, candidates) in zip(names, found):
+        if match and match["soc_code"] == current:
+            continue
         if match:
             items.append({"typed": name, "match": entry(name, match)})
         elif candidates:
@@ -276,7 +286,9 @@ async def validate_careers_to_compare(value: str, answers: dict) -> dict:
             return {"status": "fix", "message": f"I couldn't find salary data for \"{name}\". Try another name for that career."}
     if all("match" in i for i in items):
         unique = list({i["match"]["soc_code"]: i["match"] for i in items}.values())
-        if len(unique) < 2:
+        if not unique:
+            return {"status": "fix", "message": f"That's your current job. {ask}"}
+        if len(unique) < needed:
             return {"status": "fix", "message": f"Those all match {unique[0]['title']}. Name at least two different careers."}
         return _confirm(f"I'll compare: {', '.join(m['title'] for m in unique)}.", {"career_matches": json.dumps(unique)})
     return {"status": "confirm", "picks": {"key": "career_matches", "items": items}}
@@ -596,7 +608,6 @@ VALIDATORS = {
     ("path3", "school_name"): validate_school_name,
     ("path3", "programs"): validate_programs,
     ("path4", "careers_to_compare"): validate_careers_to_compare,
-    ("path4", "current_salary"): validate_salary,
     ("path5", "target_career"): validate_target_career,
     (None, "current_field"): validate_current_field,
     (None, "current_role"): validate_current_role,
