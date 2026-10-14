@@ -313,9 +313,9 @@ def _comparison_section(options: list[dict]) -> str:
             opt.get("education", ""),
             "None" if years == 0 else f"{years:g}",
             "No data" if opt.get("debt") is None else _usd(_num(opt.get("debt"))),
-            _usd(_num(opt.get("expected_salary"))),
+            _usd(_num(opt.get("expected_salary"))) + (" (your pay)" if opt.get("user_numbers") else ""),
         ])
-    table = _table(["Career", "Education", "Typical years of school", "Median debt", "Median salary"], rows)
+    table = _table(["Career", "Education", "Typical years of school", "Median debt", "Salary"], rows)
     # The user already holds their current job, so its training doesn't apply.
     no_school = [o.get("name", "") for o in options if _num(o.get("years_in_school")) == 0 and not o.get("current_job")]
     training_note = (
@@ -327,7 +327,7 @@ def _comparison_section(options: list[dict]) -> str:
         '<section><h2>Side by side</h2>'
         '<p class="note">Years of school are typical, counted from a high school diploma. Debt is median '
         'student debt (College Scorecard) for the degree fields linked to each career. Salaries are national '
-        'medians across all experience levels, not starting pay.</p>'
+        'medians across all experience levels, not starting pay, except your pay where you gave it.</p>'
         f"{table}{training_note}{_cap_note(options)}{_cost_notes(options)}</section>"
     )
 
@@ -339,10 +339,11 @@ SALARY_SOURCES = {
 }
 
 
-def _salary_chart(options: list[dict]) -> str:
-    """Salary comparison for the chosen rows, labeled with their sources."""
+def _salary_chart(options: list[dict], with_user_pay: bool = False) -> str:
+    """Salary comparison for the chosen rows, labeled with their sources.
+    with_user_pay (path4): the user's own pay is a bar too, next to the medians."""
     # Only national figures belong in a chart titled median salary.
-    shown = [o for o in options if not o.get("user_numbers") and o.get("expected_salary")]
+    shown = [o for o in options if (with_user_pay or not o.get("user_numbers")) and o.get("expected_salary")]
     if not shown:
         return ""
     bars = [{"label": o.get("short_label") or o.get("name", ""), "value": o["expected_salary"]} for o in shown]
@@ -350,9 +351,13 @@ def _salary_chart(options: list[dict]) -> str:
         text for key, text in SALARY_SOURCES.items()
         if any((o.get("salary_basis") or "").startswith(key) for o in shown)
     ]
+    title = "Median salary"
+    if any(o.get("user_numbers") for o in shown):
+        sources.append("your pay as you gave it")
+        title = "Salary"
     return (
-        '<section><h2>Median salary by option</h2>'
-        + bar_chart("Median annual salary", "Median annual salary", "Option", bars, "usd", "; ".join(sources))
+        f'<section><h2>{title} by option</h2>'
+        + bar_chart(f"{title} (annual)", f"{title} (annual)", "Option", bars, "usd", "; ".join(sources))
         + "</section>"
     )
 
@@ -452,7 +457,7 @@ def render_report(spec: dict, rows: list[dict], intake_answers: dict | None = No
         "<h1>Your Next Right Step report</h1>",
         f'<p class="headline">{_esc(spec.get("headline", ""))}</p>',
     ]
-    body.append(_salary_chart(options))
+    body.append(_salary_chart(options, with_user_pay=(intake_answers or {}).get("path_type") == "path4"))
     body.extend(_section(s, options) for s in sections)
     if (intake_answers or {}).get("path_type") == "path4":
         body.append(_comparison_section(options))

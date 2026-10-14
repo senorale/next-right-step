@@ -194,6 +194,35 @@ const PATH4_CURRENT_ROLE_STEP: IntakeStep = {
   placeholder: "e.g. retail manager, medical assistant, IT support...",
 }
 
+const INCLUDE_SALARY_STEP: IntakeStep = {
+  key: 'include_salary',
+  question: "Do you want to share your pay?",
+  subtitle: "I'll show it next to the careers instead of the national median for your job.",
+  options: [
+    { value: 'yes', label: "Yes, use my pay" },
+    { value: 'no', label: "No, use the national median" },
+  ],
+  placeholder: "",
+}
+
+const CURRENT_SALARY_STEP: IntakeStep = {
+  key: 'current_salary',
+  question: "What's your pay?",
+  subtitle: "Yearly, or hourly with the hours you work a week.",
+  placeholder: "e.g. $55,000 a year, or $22/hr, 32 hours a week",
+}
+
+const COMPARE_TO_MEDIAN_STEP: IntakeStep = {
+  key: 'compare_to_median',
+  question: "Also show the national median for your job?",
+  subtitle: "See how your pay compares with what most people in your job earn.",
+  options: [
+    { value: 'yes', label: "Yes, show both" },
+    { value: 'no', label: "No, just my pay" },
+  ],
+  placeholder: "",
+}
+
 function getCareersToCompareStep(answers: Record<string, string>): IntakeStep {
   return {
     key: 'careers_to_compare',
@@ -394,7 +423,14 @@ function getNextStep(answers: Record<string, string>): IntakeStep | null {
 
   if (path === 'path4') {
     if (!keys.includes('include_current_role')) return INCLUDE_CURRENT_ROLE_STEP
-    if (answers.include_current_role === 'yes' && !keys.includes('current_role')) return PATH4_CURRENT_ROLE_STEP
+    if (answers.include_current_role === 'yes') {
+      if (!keys.includes('current_role')) return PATH4_CURRENT_ROLE_STEP
+      if (!keys.includes('include_salary')) return INCLUDE_SALARY_STEP
+      if (answers.include_salary === 'yes') {
+        if (!keys.includes('current_salary')) return CURRENT_SALARY_STEP
+        if (!keys.includes('compare_to_median')) return COMPARE_TO_MEDIAN_STEP
+      }
+    }
     if (!keys.includes('careers_to_compare')) return getCareersToCompareStep(answers)
     return null
   }
@@ -421,7 +457,8 @@ function estimateTotalSteps(answers: Record<string, string>): number {
     return answers.school_situation === 'switching' ? 6 : 5
   }
   if (path === 'path4') {
-    return answers.include_current_role === 'yes' ? 4 : 3
+    if (answers.include_current_role !== 'yes') return 3
+    return answers.include_salary === 'yes' ? 7 : 5
   }
   if (path === 'path5') {
     return 2 + countStartingPointSteps(answers)
@@ -508,6 +545,7 @@ const DERIVED_KEYS: Record<string, string[]> = {
   target_career: ['target_career_code', 'target_career_title'],
   current_field: ['current_field_normalized'],
   current_role: ['current_role_code', 'current_role_title'],
+  current_salary: ['current_salary_value'],
 }
 const HIDDEN_KEYS = new Set(Object.values(DERIVED_KEYS).flat())
 
@@ -523,6 +561,7 @@ const CHECKING_MESSAGES: Record<string, string> = {
   target_location: 'Finding those places…',
   specific_numbers: 'Reading your numbers…',
   current_field: 'Reading your field of study…',
+  current_salary: 'Reading your pay…',
 }
 
 function CheckingStatus({ stepKey }: { stepKey: string }) {
@@ -1321,9 +1360,13 @@ function buildPrompt(answers: Record<string, string>): string {
     if (answers.careers_to_compare) lines.push(`- Careers to compare: ${careersLine(answers)}`)
     if (answers.include_current_role === 'yes' && answers.current_role) {
       lines.push(`- Include my current job: ${currentJob(answers)}`)
+      if (answers.include_salary === 'yes' && answers.current_salary_value) {
+        lines.push(`- My pay: $${Number(answers.current_salary_value).toLocaleString('en-US')} a year`)
+        if (answers.compare_to_median === 'yes') lines.push('- Also show the national median for my job')
+      }
     }
     lines.push('')
-    lines.push('Compare each career path: education required, timeline, cost, salary, payoff timeline. Full financial analysis for all paths.')
+    lines.push('Compare these careers side by side: education required, years of school, median debt, and salary.')
   }
 
   if (path === 'path5') {

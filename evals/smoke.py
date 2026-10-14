@@ -82,8 +82,11 @@ def chat_message(a: dict) -> str:
         lines += ["- I want to compare career paths side by side", f"- Careers to compare: {careers}"]
         if a.get("include_current_role") == "yes" and a.get("current_role"):
             lines.append(f"- Include my current job: {current_job(a)}")
-        lines += ["", "Compare each career path: education required, timeline, cost, salary, payoff timeline. "
-                  "Full financial analysis for all paths."]
+            if a.get("include_salary") == "yes" and a.get("current_salary_value"):
+                lines.append(f"- My pay: ${int(a['current_salary_value']):,} a year")
+                if a.get("compare_to_median") == "yes":
+                    lines.append("- Also show the national median for my job")
+        lines += ["", "Compare these careers side by side: education required, years of school, median debt, and salary."]
     else:
         target = with_soc(a.get("target_career_title") or a["target_career"], a.get("target_career_code"))
         lines += ["- I have a specific career in mind", f"- Target career: {target}"]

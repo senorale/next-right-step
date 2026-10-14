@@ -424,14 +424,56 @@ async def validate_user_numbers(value: str, answers: dict) -> dict:
     return _confirm(f"I'll use: {_describe_numbers(numbers)}.", {"user_numbers": json.dumps(numbers)})
 
 
+PAY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "amount": {"type": "number", "description": "The pay as written, 0 if none or a range"},
+        "period": {"type": "string", "enum": ["year", "month", "week", "hour"]},
+        "hours_per_week": {"type": ["number", "null"], "description": "Hours worked a week, if given"},
+    },
+    "required": ["amount", "period", "hours_per_week"],
+    "additionalProperties": False,
+}
+PAY_PROMPT = (
+    "Read the user's pay. amount is the number as written (55k -> 55000), period is what it is per, "
+    "hours_per_week only if they say it. A range or several different pays: amount 0."
+)
+WEEKS_PER_YEAR = 52
+PERIODS_PER_YEAR = {"year": 1, "month": 12, "week": WEEKS_PER_YEAR}
+
+
+def _money(amount: float) -> str:
+    """$22, $18.50, $4,500: cents only when there are any."""
+    return f"${amount:,.0f}" if float(amount).is_integer() else f"${amount:,.2f}"
+
+
 async def validate_salary(value: str, answers: dict) -> dict:
-    """A yearly salary typed as text ("$55,000", "55k"). One number in a sane
-    range; no model call needed."""
-    salaries = [n for n in _numbers_in(value) if 10_000 <= n <= 1_000_000]
-    if len(salaries) != 1:
-        return {"status": "fix", "message": "Enter your yearly salary as one number, like $55,000."}
-    salary = round(salaries[0])
-    return _confirm(f"I'll use ${salary:,} a year.", {"current_salary_value": str(salary)})
+    """Pay typed as text, yearly or hourly ("55k", "$22/hr, 32 hours a week").
+    The model reads the parts; code checks they were typed and does the math."""
+    ask = "Enter one pay, like $55,000 a year or $22 an hour, 40 hours a week."
+    pay = await _ask_json("pay", PAY_SCHEMA, PAY_PROMPT, value)
+    typed = _numbers_in(value)
+    if pay is None:
+        # Model call failed: a lone yearly figure still works.
+        salaries = [n for n in typed if 10_000 <= n <= 1_000_000]
+        if len(salaries) != 1:
+            return {"status": "fix", "message": ask}
+        pay = {"amount": salaries[0], "period": "year", "hours_per_week": None}
+    amount, period, hours = pay.get("amount") or 0, pay.get("period"), pay.get("hours_per_week")
+    # Several pay-sized figures ("between 50k and 60k") is a range, whatever the model read.
+    if amount <= 0 or amount not in typed or len([n for n in typed if n >= 1_000]) > 1:
+        return {"status": "fix", "message": ask}
+    if period == "hour":
+        if not hours or hours not in typed or not 1 <= hours <= 80:
+            return {"status": "fix", "message": f"How many hours a week do you work at {_money(amount)} an hour? Add them, like {_money(amount)}/hr, 40 hours a week."}
+        salary = round(amount * hours * WEEKS_PER_YEAR)
+        how = f" ({_money(amount)}/hr x {hours:g} hrs x {WEEKS_PER_YEAR} weeks)"
+    else:
+        salary = round(amount * PERIODS_PER_YEAR.get(period, 1))
+        how = "" if period == "year" else f" ({_money(amount)} a {period} x {PERIODS_PER_YEAR[period]})"
+    if not 1_000 <= salary <= 1_000_000:
+        return {"status": "fix", "message": ask}
+    return _confirm(f"I'll use ${salary:,} a year{how}.", {"current_salary_value": str(salary)})
 
 
 def _school_label(school: dict) -> str:
@@ -608,6 +650,7 @@ VALIDATORS = {
     ("path3", "school_name"): validate_school_name,
     ("path3", "programs"): validate_programs,
     ("path4", "careers_to_compare"): validate_careers_to_compare,
+    ("path4", "current_salary"): validate_salary,
     ("path5", "target_career"): validate_target_career,
     (None, "current_field"): validate_current_field,
     (None, "current_role"): validate_current_role,

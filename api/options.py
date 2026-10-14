@@ -335,9 +335,36 @@ def includes_current_role(intake_answers: dict | None) -> bool:
         answers.get("include_current_role"), answers.get("compare_to_current"))
 
 
+def current_pay(intake_answers: dict | None) -> float | None:
+    """path4: the yearly pay the user gave for their current job, if they chose to."""
+    answers = intake_answers or {}
+    if not includes_current_role(answers) or answers.get("include_salary") != "yes":
+        return None
+    try:
+        pay = float(answers.get("current_salary_value") or 0)
+    except ValueError:
+        return None
+    return pay if pay > 0 else None
+
+
+def current_job_ids(intake_answers: dict | None) -> list[str]:
+    """path4: the rows that stand for the user's current job. With their pay,
+    a "current:pay" row, plus the job's national median if they asked for it;
+    without, the median row alone."""
+    answers = intake_answers or {}
+    if not includes_current_role(answers):
+        return []
+    median = f"occ:{answers['current_role_code']}"
+    if current_pay(answers) is None:
+        return [median]
+    return ["current:pay"] + ([median] if answers.get("compare_to_median") == "yes" else [])
+
+
 def path4_options(intake_answers: dict) -> dict:
-    """compare_careers: the careers the user confirmed (career_matches) and
-    their current job when they included it, each at its national median."""
+    """compare_careers: the careers the user confirmed (career_matches), each at
+    its national median, and their current job when they included it: at their
+    own pay if they gave it, at the national median otherwise or when they also
+    asked for the median."""
     careers = [c for c in _parse_list(intake_answers.get("career_matches")) or [] if isinstance(c, dict) and c.get("soc_code")]
     codes = [c["soc_code"] for c in careers]
     if includes_current_role(intake_answers):
@@ -352,7 +379,17 @@ def path4_options(intake_answers: dict) -> dict:
         row = career_option(cost)
         if code == current:
             # Named for the user, so the report says "your current job", not only the O*NET title.
-            row.update(name=f"Your current job ({cost['name']})", short_label="Your current job", current_job=True)
+            pay = current_pay(intake_answers)
+            if pay is not None:
+                rows.append({**row, "option_id": "current:pay", "name": f"Your current job ({cost['name']})",
+                             "short_label": "Your pay", "expected_salary": pay, "salary_basis": "Your pay",
+                             "user_numbers": True, "current_job": True})
+                if f"occ:{code}" not in current_job_ids(intake_answers):
+                    continue
+                row.update(name=f"Your current job, national median ({cost['name']})", short_label="Your job (median)",
+                           current_job=True)
+            else:
+                row.update(name=f"Your current job ({cost['name']})", short_label="Your current job", current_job=True)
         rows.append(row)
     if missing:
         return {"error": f"No salary or education data for {', '.join(missing)}"}
@@ -449,9 +486,8 @@ def check_rows(intake_answers: dict | None, data_blocks: list[dict]) -> tuple[li
         required += [f"career {title or code}" for code, title in wanted if code and f"occ:{code}" not in ids]
         if not of_kind("occ:"):
             required.append("careers to compare")
-        current = answers.get("current_role_code")
-        if includes_current_role(answers) and f"occ:{current}" not in ids:
-            expected.append(f"current job {answers.get('current_role_title') or current}")
+        current = answers.get("current_role_title") or answers.get("current_role_code")
+        expected += [f"current job {current}" for i in current_job_ids(answers) if i not in ids]
 
     return list(dict.fromkeys(required)), expected
 
