@@ -37,6 +37,11 @@ SORT = {"Earnings after graduation": "earnings", "Graduation rate": "graduation_
         "Loan repayment rate": "loan_repayment"}
 
 
+def with_soc(title: str, code: str | None) -> str:
+    """withSoc in src/app/chat/page.tsx."""
+    return f"{title} (SOC {code})" if code else title
+
+
 def chat_message(a: dict) -> str:
     """First chat message, same shape as buildPrompt in src/app/chat/page.tsx."""
     path = a["path_type"]
@@ -66,15 +71,28 @@ def chat_message(a: dict) -> str:
                   "Compare programs at my school. Show school-specific earnings (Scorecard) and national occupation salary (BLS) "
                   "for each. Include career options, demand, and bright outlook. Full financial analysis."]
     else:
-        lines.append("- I want to compare career paths side by side" if path == "path4" else "- I have a specific career in mind")
-        lines.append(f"- Careers to compare: {a['careers_to_compare']}" if path == "path4" else f"- Target career: {a['target_career']}")
+        if path == "path4":
+            # careersLine in src/app/chat/page.tsx: confirmed careers with SOC codes, else what they typed.
+            matches = json.loads(a["career_matches"]) if a.get("career_matches") else None
+            careers = ", ".join(with_soc(m["title"], m["soc_code"]) for m in matches) if matches else a["careers_to_compare"]
+            lines += ["- I want to compare career paths side by side", f"- Careers to compare: {careers}"]
+        else:
+            target = with_soc(a.get("target_career_title") or a["target_career"], a.get("target_career_code"))
+            lines += ["- I have a specific career in mind", f"- Target career: {target}"]
+        # startingPointLines in src/app/chat/page.tsx
         lines.append(f"- Current position: {POSITIONS[a['current_position']]}")
         if a.get("education_level"):
             lines.append(f"- Highest education: {LEVELS[a['education_level']]}")
         if a.get("current_field"):
-            lines.append(f"- Field of study: {a['current_field']}")
+            lines.append(f"- Field of study: {a.get('current_field_normalized') or a['current_field']}")
         if a.get("current_role"):
-            lines.append(f"- Current job: {a['current_role']}")
+            lines.append(f"- Current job: {with_soc(a.get('current_role_title') or a['current_role'], a.get('current_role_code'))}")
+        if a.get("compare_to_current") == "no":
+            lines.append("- Compare only these careers to each other, not to my current job")
+            if a.get("payoff_baseline") == "salary" and a.get("current_salary_value"):
+                lines.append(f"- Measure payoff against my current salary of ${int(a['current_salary_value']):,}")
+            else:
+                lines.append("- Measure payoff against a high school diploma (national median)")
         lines += ["", "Compare each career path: education required, timeline, cost, salary, bright outlook, payoff timeline. "
                   "Full financial analysis for all paths." if path == "path4" else
                   "Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected "
