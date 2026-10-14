@@ -225,7 +225,7 @@ TOOLS = [
     },
     {
         "name": "compare_careers",
-        "description": "Compare the careers the user confirmed in intake, plus their current job if they included it. Returns a row per career with years of school, median student debt, and BLS median salary, and a high school diploma row for payoff. All figures are computed; use them as given. Takes no arguments: the careers come from intake.",
+        "description": "Compare the careers the user confirmed in intake, plus their current job if they included it. Returns a row per career with years of school, median student debt, and BLS median salary. All figures are computed; use them as given. Takes no arguments: the careers come from intake.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
 ]

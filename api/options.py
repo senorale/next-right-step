@@ -336,9 +336,8 @@ def includes_current_role(intake_answers: dict | None) -> bool:
 
 
 def path4_options(intake_answers: dict) -> dict:
-    """compare_careers: the careers the user confirmed (career_matches), their
-    current job when they included it, each at its national median, and the
-    high school baseline as the payoff anchor."""
+    """compare_careers: the careers the user confirmed (career_matches) and
+    their current job when they included it, each at its national median."""
     careers = [c for c in _parse_list(intake_answers.get("career_matches")) or [] if isinstance(c, dict) and c.get("soc_code")]
     codes = [c["soc_code"] for c in careers]
     if includes_current_role(intake_answers):
@@ -354,8 +353,7 @@ def path4_options(intake_answers: dict) -> dict:
         return {"error": f"No salary or education data for {', '.join(missing)}"}
     if not rows:
         return {"error": "No confirmed careers in intake"}
-    hs = next(r for r in baseline_rows(None) if r["option_id"] == "baseline:hs")
-    return {"options": rows + [hs]}
+    return {"options": rows}
 
 
 def with_rows(tool_name: str, args: dict, result):
@@ -379,7 +377,7 @@ def candidate_rows(intake_answers: dict | None, data_blocks: list[dict]) -> list
     by_id: dict[str, dict] = {}
     # path3 compares programs with each other and with the occupations they
     # lead to; the report cited baseline gaps without showing the baselines.
-    # path4's compare_careers returns the one baseline it needs.
+    # path4 compares careers side by side, with no payoff to anchor.
     if (intake_answers or {}).get("path_type") not in ("path3", "path4"):
         for row in baseline_rows(intake_answers):
             by_id[row["option_id"]] = row

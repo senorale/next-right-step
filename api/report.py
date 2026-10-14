@@ -52,7 +52,7 @@ Per path:
 - path1: college vs a trade vs working now. Show every row compare_education_paths returned. The headline states figures: with a user_numbers row, the user's salary and debt against the national median; otherwise whether the chosen occupation needs graduate school, its total years of school, median salary, and median debt, and, if it does, its years beyond a bachelor's and its salary and debt gaps against the bachelor's row.
 - path2: show only the schools they named (not other campuses a search returned), or for a location the schools found. Code orders them by rank_by and limits table_metrics to what they chose.
 - path3: show the programs compare_programs returned and the occupations in each program's leads_to; code orders the programs by program_priority. Compare each program's graduates' earnings with the national median salary of the occupations it leads to, and the programs with each other.
-- path4: show every row compare_careers returned. Compare the careers with each other and, when a row is their current job (current_role_code in intake), each career with it. Salaries are national medians, even for their current job. Payoff is measured against the high school diploma row.
+- path4: show every row compare_careers returned. Compare the careers with each other and, when a row is their current job (current_role_code in intake), each career with it. Salaries are national medians, even for their current job. Compare salary, years of school, and debt; there is no payoff.
 - path5: a roadmap from their current role to the target: ordered steps with the typical time for each.
 """
 
@@ -263,16 +263,6 @@ def _financial_section(options: list[dict], baseline_salary: float, baseline_lab
         "Payoff timeline: years from the first day of school", "Years from starting school until the cost is recovered", "Option",
         payoff_bars, "years", "Computed from each option's cost and expected salary in the table above",
     )
-    capped = [o.get("name", "") for o in options if _num(o.get("expected_salary")) >= BLS_SALARY_CAP]
-    cap_note = (
-        f'<p class="note">BLS reports wages above {_usd(BLS_SALARY_CAP)} as {_usd(BLS_SALARY_CAP)}, '
-        f'so the real median for {_esc(", ".join(capped))} may be higher.</p>'
-        if capped else ""
-    )
-    cost_notes = "".join(
-        f"<li>{_esc(o.get('name', ''))}: {_esc(o['cost_basis'])}</li>"
-        for o in options if o.get("cost_basis") and _num(o.get("years_in_school")) > 0
-    )
     return (
         '<section><h2>Financial breakdown</h2>'
         f'<p class="note">Baseline: {_esc(baseline_label)} at {_usd(baseline_salary)}/yr. '
@@ -283,12 +273,55 @@ def _financial_section(options: list[dict], baseline_salary: float, baseline_lab
         + (" Rows marked (your numbers) use the tuition and salary you gave instead, as listed below."
            if any(o.get("user_numbers") for o in options) else "")
         + '</p>'
-        f"{table}{cap_note}"
+        f"{table}{_cap_note(options)}"
         '<p class="note"><strong>About the payoff timeline:</strong> it counts from the first day of school, '
         'assumes full-time school with no income in the meantime, and assumes the median salary right after '
         'graduating. Starting salaries are often lower than the median, so the real payoff usually takes longer.</p>'
-        + (f'<p class="note">Education cost sources:</p><ul class="note">{cost_notes}</ul>' if cost_notes else "")
+        + _cost_notes(options)
         + f"{chart}</section>"
+    )
+
+
+def _cost_notes(options: list[dict]) -> str:
+    notes = "".join(
+        f"<li>{_esc(o.get('name', ''))}: {_esc(o['cost_basis'])}</li>"
+        for o in options if o.get("cost_basis") and _num(o.get("years_in_school")) > 0
+    )
+    return f'<p class="note">Education cost sources:</p><ul class="note">{notes}</ul>' if notes else ""
+
+
+def _cap_note(options: list[dict]) -> str:
+    capped = [o.get("name", "") for o in options if _num(o.get("expected_salary")) >= BLS_SALARY_CAP]
+    return (
+        f'<p class="note">BLS reports wages above {_usd(BLS_SALARY_CAP)} as {_usd(BLS_SALARY_CAP)}, '
+        f'so the real median for {_esc(", ".join(capped))} may be higher.</p>'
+        if capped else ""
+    )
+
+
+def _comparison_section(options: list[dict]) -> str:
+    """path4: careers side by side on school, debt, and salary. No payoff: every
+    figure is a national median with school counted from zero, so a payoff
+    would only restate path1's question."""
+    if not options:
+        return ""
+    rows = []
+    for opt in options:
+        years = _num(opt.get("years_in_school"))
+        rows.append([
+            opt.get("name", ""),
+            opt.get("education", ""),
+            "None" if years == 0 else f"{years:g}",
+            "No data" if opt.get("debt") is None else _usd(_num(opt.get("debt"))),
+            _usd(_num(opt.get("expected_salary"))),
+        ])
+    table = _table(["Career", "Education", "Typical years of school", "Median debt", "Median salary"], rows)
+    return (
+        '<section><h2>Side by side</h2>'
+        '<p class="note">Years of school are typical, counted from a high school diploma. Debt is median '
+        'student debt (College Scorecard) for the degree fields linked to each career. Salaries are national '
+        'medians across all experience levels, not starting pay.</p>'
+        f"{table}{_cap_note(options)}{_cost_notes(options)}</section>"
     )
 
 
@@ -414,7 +447,10 @@ def render_report(spec: dict, rows: list[dict], intake_answers: dict | None = No
     ]
     body.append(_salary_chart(options))
     body.extend(_section(s, options) for s in sections)
-    body.append(_financial_section(options, baseline_salary, baseline_label))
+    if (intake_answers or {}).get("path_type") == "path4":
+        body.append(_comparison_section(options))
+    else:
+        body.append(_financial_section(options, baseline_salary, baseline_label))
     if limitations:
         body.append(
             "<section><h2>Limitations</h2><ul>"
