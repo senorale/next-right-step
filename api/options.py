@@ -352,7 +352,7 @@ def path4_options(intake_answers: dict) -> dict:
         row = career_option(cost)
         if code == current:
             # Named for the user, so the report says "your current job", not only the O*NET title.
-            row.update(name=f"Your current job ({cost['name']})", short_label="Your current job")
+            row.update(name=f"Your current job ({cost['name']})", short_label="Your current job", current_job=True)
         rows.append(row)
     if missing:
         return {"error": f"No salary or education data for {', '.join(missing)}"}

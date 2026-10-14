@@ -316,12 +316,19 @@ def _comparison_section(options: list[dict]) -> str:
             _usd(_num(opt.get("expected_salary"))),
         ])
     table = _table(["Career", "Education", "Typical years of school", "Median debt", "Median salary"], rows)
+    # The user already holds their current job, so its training doesn't apply.
+    no_school = [o.get("name", "") for o in options if _num(o.get("years_in_school")) == 0 and not o.get("current_job")]
+    training_note = (
+        f'<p class="note">{_esc(", ".join(no_school))}: no school is required, but these careers often take '
+        'an apprenticeship, on-the-job training, or a license first. That time isn\'t counted here.</p>'
+        if no_school else ""
+    )
     return (
         '<section><h2>Side by side</h2>'
         '<p class="note">Years of school are typical, counted from a high school diploma. Debt is median '
         'student debt (College Scorecard) for the degree fields linked to each career. Salaries are national '
         'medians across all experience levels, not starting pay.</p>'
-        f"{table}{_cap_note(options)}{_cost_notes(options)}</section>"
+        f"{table}{training_note}{_cap_note(options)}{_cost_notes(options)}</section>"
     )
 
 
