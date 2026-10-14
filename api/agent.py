@@ -22,13 +22,14 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path="../.env")
 
 import openai
+from alerts import send_alert
 from db import (
     search_schools,
     get_school_programs,
     search_occupations,
 )
-from career_cost import path1_options
-from options import allowed_metrics, candidate_rows, pairwise_gaps, path3_options, with_rows
+from career_cost import CASHIER_CODE, ELECTRICIAN_CODE, path1_options
+from options import allowed_metrics, candidate_rows, check_rows, pairwise_gaps, path3_options, with_rows
 from user_numbers import extract_user_numbers
 from report import REPORT_PROMPT, render_report, report_schema
 
@@ -251,8 +252,10 @@ TOOL_DISPATCH = {
 
 def _compare_education_paths(occupation_code: str, user_numbers: dict) -> dict:
     options = path1_options(occupation_code, user_numbers)
-    if len(options) < 5:
-        return {"error": f"No salary or education data for occupation_code {occupation_code!r}"}
+    expected = ["baseline:hs", f"occ:{CASHIER_CODE}", f"occ:{ELECTRICIAN_CODE}", "baseline:bachelors", f"occ:{occupation_code}"]
+    missing = [i for i in expected if i not in {o["option_id"] for o in options}]
+    if missing:
+        return {"error": f"No salary or education data for {', '.join(missing)}"}
     return {"occupation_code": occupation_code, "options": options}
 
 
@@ -531,6 +534,7 @@ async def run_agent_stream(
 
     text_response: str | None = None
     agent_calls = 0
+    tool_errors: list[dict] = []
     dispatch = _dispatch_for(await resolve_user_numbers(intake_answers), intake_answers)
 
     for iteration in range(MAX_TOOL_ITERATIONS):
@@ -542,7 +546,7 @@ async def run_agent_stream(
             llm_total += time.perf_counter() - t0
             gather_steps += 1
         except openai.APIError as exc:
-            logger.error("Model API failed after retries: %s", exc)
+            send_alert("Model API failed after retries", {"error": repr(exc), "intake_answers": intake_answers})
             yield {
                 "event": "complete",
                 "response": "Sorry, I'm having trouble right now. Please try again in a moment.",
@@ -576,13 +580,21 @@ async def run_agent_stream(
                     result = await asyncio.to_thread(func, tool_input)
                     tools_total += time.perf_counter() - t0
                     messages.append({"role": "tool", "tool_call_id": tool_id, "content": json.dumps(result, default=_json_default)})
-                    if not (isinstance(result, dict) and "error" in result):
+                    if isinstance(result, dict) and "error" in result:
+                        tool_errors.append({"tool": tool_name, "args": tool_input, "error": result["error"]})
+                    elif isinstance(result, dict) and "options" in result and not result["options"]:
+                        # Results came back, but none has the data a comparison needs.
+                        tool_errors.append({"tool": tool_name, "args": tool_input, "error": "No comparable rows"})
+                    else:
                         data_blocks.append({"type": tool_name, "data": result})
                     gather_steps += 1
                     # Same message, bar advances.
                     yield gathering(progress_message)
                 except Exception as exc:
                     logger.exception("Tool %s failed", tool_name)
+                    tool_errors.append({"tool": tool_name, "args": call.function.arguments, "error": repr(exc)})
+                    send_alert(f"Tool {tool_name} raised", {"args": call.function.arguments, "error": repr(exc),
+                                                           "intake_answers": intake_answers})
                     messages.append({"role": "tool", "tool_call_id": tool_id, "content": f"Error executing {tool_name}: {exc}"})
 
         else:
@@ -591,7 +603,8 @@ async def run_agent_stream(
             break
 
     if text_response is None:
-        logger.warning("Agent hit MAX_TOOL_ITERATIONS=%d without finishing", MAX_TOOL_ITERATIONS)
+        send_alert("Agent hit MAX_TOOL_ITERATIONS", {"limit": MAX_TOOL_ITERATIONS, "tool_errors": tool_errors,
+                                                     "intake_answers": intake_answers})
         yield {
             "event": "complete",
             "response": "I got stuck working through that. Try rephrasing your question or asking something simpler.",
@@ -599,6 +612,24 @@ async def run_agent_stream(
             "conversation_history": messages,
         }
         return
+
+    if intake_answers:
+        required, expected = check_rows(intake_answers, data_blocks)
+        details = {"path": intake_answers.get("path_type"), "tool_errors": tool_errors, "intake_answers": intake_answers}
+        if required:
+            send_alert(f"Missing required data ({intake_answers.get('path_type')})", {"missing": required, **details})
+            yield {
+                "event": "complete",
+                "response": f"I couldn't get the data this comparison needs: {'; '.join(required)}. "
+                            "The problem has been reported. Please try again later.",
+                "report_html": "",
+                "report_status": "error",
+                "tool_errors": tool_errors,
+                "conversation_history": messages,
+            }
+            return
+        if expected:
+            send_alert(f"Missing expected data ({intake_answers.get('path_type')})", {"missing": expected, **details})
 
     report_html = ""
     report_status = "skipped"
@@ -620,9 +651,10 @@ async def run_agent_stream(
                 report_status = "success"
                 logger.info("Report OK: %d bytes HTML", len(report_html))
             else:
-                logger.warning("Report returned empty HTML")
+                send_alert("Report returned empty HTML", {"intake_answers": intake_answers})
         except Exception as exc:
             logger.exception("Report generation failed: %s", exc)
+            send_alert("Report generation failed", {"error": repr(exc), "intake_answers": intake_answers})
     else:
         logger.info("Skipping report: data_blocks=%d, intake_answers=%s", len(data_blocks), intake_answers is not None)
 
@@ -635,6 +667,7 @@ async def run_agent_stream(
         "response": text_response,
         "report_html": report_html,
         "report_status": report_status,
+        "tool_errors": tool_errors,
         "conversation_history": messages,
     }
 

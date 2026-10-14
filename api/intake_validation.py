@@ -31,6 +31,7 @@ import json
 import logging
 import re
 
+from alerts import send_alert
 from db import occupations_by_title, school_program_titles, search_occupations, search_schools
 from options import school_missing
 from llm import MODEL, client
@@ -63,8 +64,9 @@ async def _ask_json(name: str, schema: dict, prompt: str, text: str, max_tokens:
         )
         parsed = json.loads(response.choices[0].message.content or "{}")
         return parsed if isinstance(parsed, dict) else None
-    except Exception:
+    except Exception as exc:
         logger.exception("Intake model call %s failed", name)
+        send_alert(f"Intake model call {name} failed", {"error": repr(exc), "text": text})
         return None
 
 
@@ -485,6 +487,8 @@ async def validate_programs(value: str, answers: dict) -> dict:
     titles = None
     if (answers.get("school_id") or "").isdigit():
         titles = await asyncio.to_thread(school_program_titles, int(answers["school_id"]))
+        if not titles:
+            send_alert("No program list for school", {"school_id": answers["school_id"], "school": school})
     parsed = await _ask_json("programs", PROGRAMS_SCHEMA, PROGRAMS_PROMPT + "\n".join(titles or {}), value, max_tokens=512)
     if parsed is None:
         return _confirm(f"I'll compare: {value.strip()}.", {"program_list": json.dumps(_split(value))})

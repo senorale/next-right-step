@@ -10,6 +10,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from dotenv import load_dotenv
 
+from alerts import send_alert
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -51,7 +53,7 @@ def _fetch_typical_years(occupation_code: str) -> float | None:
             "User-Agent": "should-i-go/1.0",
         }, timeout=10)
         if resp.status_code != 200:
-            logger.warning("O*NET returned %d for %s", resp.status_code, onet_code)
+            send_alert("O*NET education lookup failed", {"occupation_code": onet_code, "status": resp.status_code})
             return None
         data = resp.json().get("response", [])
         if not data:
@@ -62,8 +64,9 @@ def _fetch_typical_years(occupation_code: str) -> float | None:
         else:
             top = max(data, key=lambda d: d.get("code", 0))
         return EDUCATION_CODE_TO_YEARS.get(top["code"])
-    except Exception:
+    except Exception as exc:
         logger.exception("O*NET fetch failed for %s", occupation_code)
+        send_alert("O*NET education lookup failed", {"occupation_code": occupation_code, "error": repr(exc)})
         return None
 
 
@@ -147,22 +150,24 @@ def search_occupations(keyword: str) -> dict:
             "Accept": "application/json",
             "User-Agent": "should-i-go/1.0",
         }, timeout=10)
-    except requests.RequestException:
+    except requests.RequestException as exc:
         logger.exception("O*NET search failed for '%s'", keyword)
+        send_alert("O*NET search failed", {"keyword": keyword, "error": repr(exc)})
         return {"error": "O*NET search request failed", "results": []}
 
     if resp.status_code != 200:
-        logger.warning("O*NET search returned %d for '%s'", resp.status_code, keyword)
+        send_alert("O*NET search failed", {"keyword": keyword, "status": resp.status_code, "body": resp.text[:500]})
         return {"error": f"O*NET search returned {resp.status_code}", "results": []}
 
     data = resp.json()
     raw_occupations = data.get("occupation", [])
     if not raw_occupations:
-        return {"results": [], "keyword": keyword}
+        return {"error": f"No occupations found for '{keyword}'", "results": [], "keyword": keyword}
 
     soc_codes = list({occ["code"].split(".")[0] for occ in raw_occupations})
 
     bls_data: dict = {}
+    warning = None
     if soc_codes:
         try:
             codes_params = {f"c{i}": code for i, code in enumerate(soc_codes)}
@@ -173,8 +178,10 @@ def search_occupations(keyword: str) -> dict:
                     codes_params,
                 )
                 bls_data = {r.occupation_code: dict(r._mapping) for r in rows}
-        except Exception:
+        except Exception as exc:
             logger.exception("BLS cross-reference failed")
+            warning = "BLS salaries unavailable"
+            send_alert("BLS salary lookup failed", {"keyword": keyword, "soc_codes": soc_codes, "error": repr(exc)})
 
     results = []
     fallback_count = 0
@@ -198,7 +205,10 @@ def search_occupations(keyword: str) -> dict:
             "typical_years_of_school": _safe_float(years),
         })
 
-    return {"results": results, "keyword": keyword}
+    out = {"results": results, "keyword": keyword}
+    if warning:
+        out["warning"] = warning
+    return out
 
 
 _INCOME_BRACKETS = ["0-30000", "30001-48000", "48001-75000", "75001-110000", "110001-plus"]
@@ -463,7 +473,8 @@ def search_schools(
         return {"results": [_school_result(s) for s in _prefer_exact(schools, name)], "source": "db"}
 
     if not SCORECARD_API_KEY:
-        return {"results": [], "source": "db"}
+        send_alert("College Scorecard API key not configured", {"search": "schools"})
+        return {"error": "College Scorecard API key not configured", "results": []}
 
     params: dict = {
         "api_key": SCORECARD_API_KEY,
@@ -484,14 +495,23 @@ def search_schools(
     if degree is not None:
         params["school.degrees_awarded.predominant"] = degree
 
-    resp = requests.get(SCORECARD_BASE_URL, params=params, timeout=15)
+    filters = {k: v for k, v in zip(("name", "state", "ownership", "max_net_price", "size", "sort_by", "degree"), args) if v}
+    try:
+        resp = requests.get(SCORECARD_BASE_URL, params=params, timeout=15)
+    except requests.RequestException as exc:
+        send_alert("College Scorecard school search failed", {"filters": filters, "error": repr(exc)})
+        return {"error": "College Scorecard request failed", "results": []}
     if resp.status_code != 200:
-        logger.warning("College Scorecard returned %d for '%s'", resp.status_code, name)
+        send_alert("College Scorecard school search failed",
+                   {"filters": filters, "status": resp.status_code, "body": resp.text[:500]})
         return {"error": f"Scorecard API returned {resp.status_code}", "results": []}
 
     rows = [s for s in (_map_school(r) for r in resp.json().get("results", [])) if s is not None]
     _insert_schools(rows, update_existing=True)
-    return {"results": [_school_result(s) for s in _prefer_exact(_query_local_schools(*args), name)], "source": "scorecard"}
+    schools = _query_local_schools(*args)
+    if not schools:
+        return {"error": f"No schools found for {filters}", "results": []}
+    return {"results": [_school_result(s) for s in _prefer_exact(schools, name)], "source": "scorecard"}
 
 
 _PROGRAM_PREFIX = "latest.programs.cip_4_digit"
@@ -556,16 +576,22 @@ def _ensure_programs(school_id: int) -> str | None:
     if stored:
         return None
     if not SCORECARD_API_KEY:
+        send_alert("College Scorecard API key not configured", {"search": "programs", "school_id": school_id})
         return "College Scorecard API key not configured"
 
-    resp = requests.get(SCORECARD_BASE_URL, params={
-        "id": school_id,
-        "api_key": SCORECARD_API_KEY,
-        "fields": f"{_SCHOOL_FIELDS},{_PROGRAM_FIELDS}",
-        "per_page": 1,
-    }, timeout=15)
+    try:
+        resp = requests.get(SCORECARD_BASE_URL, params={
+            "id": school_id,
+            "api_key": SCORECARD_API_KEY,
+            "fields": f"{_SCHOOL_FIELDS},{_PROGRAM_FIELDS}",
+            "per_page": 1,
+        }, timeout=15)
+    except requests.RequestException as exc:
+        send_alert("College Scorecard program fetch failed", {"school_id": school_id, "error": repr(exc)})
+        return "College Scorecard request failed"
     if resp.status_code != 200:
-        logger.warning("College Scorecard returned %d for school %d", resp.status_code, school_id)
+        send_alert("College Scorecard program fetch failed",
+                   {"school_id": school_id, "status": resp.status_code, "body": resp.text[:500]})
         return f"Scorecard API returned {resp.status_code}"
 
     results = resp.json().get("results", [])
@@ -630,6 +656,9 @@ def get_school_programs(school_id: int, program_search: str | None = None) -> di
             }
             for r in rows
         ]
+    if not programs:
+        search = f" matching '{program_search}'" if program_search else ""
+        return {"error": f"No programs with earnings data at school_id {school_id}{search}"}
 
     return {
         "school_id": school_id,
@@ -688,6 +717,8 @@ def school_programs(school_id: int) -> dict:
             }
             for r in rows
         ]
+    if not programs:
+        return {"error": f"No programs stored for school_id {school_id}"}
     return {"school_id": school_id, "school_name": school.name if school else None, "programs": programs}
 
 

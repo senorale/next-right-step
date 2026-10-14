@@ -59,7 +59,10 @@ def national_bachelors_debt() -> int:
                WHERE school_type = 'all' AND credential_level = 3 AND sample_size > 0"""
         )).all()
     result = _weighted_debt(rows)
-    return result[0] if result else 0
+    if not result:
+        # Every bachelor's baseline would show $0 debt and an instant payoff.
+        raise RuntimeError("ProgramDebt has no national bachelor's debt rows")
+    return result[0]
 
 
 def career_cost(occupation_code: str) -> dict | None:

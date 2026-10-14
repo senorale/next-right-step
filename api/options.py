@@ -15,6 +15,7 @@ expected_salary, salary_basis. Extra facts go in "metrics" (see
 report.METRIC_FORMATS), which the report can show as a table.
 """
 
+import json
 import logging
 
 from career_cost import BACHELOR_SALARY, BACHELOR_YEARS, HS_SALARY, career_cost, career_option, national_bachelors_debt
@@ -360,6 +361,65 @@ def candidate_rows(intake_answers: dict | None, data_blocks: list[dict]) -> list
     if len(rows) > MAX_CANDIDATES:
         logger.warning("Dropping %d candidate rows over MAX_CANDIDATES", len(rows) - MAX_CANDIDATES)
     return rows[:MAX_CANDIDATES]
+
+
+def _parse_list(value: str | None) -> list | None:
+    try:
+        parsed = json.loads(value or "null")
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def check_rows(intake_answers: dict | None, data_blocks: list[dict]) -> tuple[list[str], list[str]]:
+    """What the gathered rows lack for this path: (required, expected).
+    Required data missing means the report can't answer the question, so it is
+    not written. Expected data missing still gets a report, and an alert."""
+    answers = intake_answers or {}
+    path = answers.get("path_type")
+    rows = [r for b in data_blocks if isinstance(b.get("data"), dict) for r in b["data"].get("options") or []
+            if isinstance(r, dict) and r.get("option_id")]
+    ids = {r["option_id"] for r in rows}
+    of_kind = lambda prefix: [r for r in rows if r["option_id"].startswith(prefix)]
+    required: list[str] = []
+    expected: list[str] = []
+
+    if path == "path1":
+        if not any(b.get("type") == "compare_education_paths" for b in data_blocks):
+            required.append(f"education path comparison for {answers.get('occupation_title') or answers.get('occupation')}")
+
+    elif path == "path2":
+        picks = [p for p in (answers.get("school_picks") or "").split("|") if p]
+        if picks:
+            names = {str(c.get("value")): c.get("name") for c in _parse_list(answers.get("school_candidates")) or []
+                     if isinstance(c, dict)}
+            required += [f"school {names.get(p) or p}" for p in picks if f"school:{p}" not in ids]
+        elif not of_kind("school:"):
+            where = answers.get("target_places") or answers.get("target_location") or answers.get("target_states")
+            required.append(f"schools in {where}" if where else "schools to compare")
+
+    elif path == "path3":
+        programs = of_kind("program:")
+        titles = [t for t in _parse_list(answers.get("program_list")) or [] if isinstance(t, str)]
+        have = {r["short_label"].lower() for r in programs}
+        required += [f"program {t}" for t in dict.fromkeys(titles) if t.lower() not in have]
+        if not titles and not programs:
+            required.append(f"programs at {answers.get('school_matched_name') or answers.get('school_name') or 'the school'}")
+
+    elif path in ("path4", "path5"):
+        if path == "path4":
+            careers = [c for c in _parse_list(answers.get("career_matches")) or [] if isinstance(c, dict)]
+            wanted = [(c.get("soc_code"), c.get("title")) for c in careers]
+        else:
+            wanted = [(answers.get("target_career_code"), answers.get("target_career_title") or answers.get("target_career"))]
+        required += [f"career {title or code}" for code, title in wanted if code and f"occ:{code}" not in ids]
+        if not of_kind("occ:"):
+            required.append("careers to compare")
+        current = answers.get("current_role_code")
+        if current and answers.get("compare_to_current") != "no" and f"occ:{current}" not in ids:
+            expected.append(f"current job {answers.get('current_role_title') or current}")
+
+    return list(dict.fromkeys(required)), expected
 
 
 def _whole_numbers(row: dict) -> dict:

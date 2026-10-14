@@ -14,6 +14,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from alerts import send_alert
 from intake_validation import validate_intake
 from agent import run_agent_stream, generate_report, _extract_data_blocks, _json_default
 
@@ -61,6 +62,7 @@ async def retry_report(req: ReportRetryRequest):
         return report
     except Exception as exc:
         logger.exception("retry-report failed: %s", exc)
+        send_alert("Report retry failed", {"error": repr(exc), "intake_answers": req.intake_answers})
         return {"summary": "", "html": "", "error": str(exc)}
 
 
