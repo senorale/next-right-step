@@ -29,7 +29,7 @@ from db import (
     search_occupations,
 )
 from career_cost import CASHIER_CODE, ELECTRICIAN_CODE, path1_options
-from options import allowed_metrics, candidate_rows, check_rows, pairwise_gaps, path3_options, with_rows
+from options import allowed_metrics, candidate_rows, check_rows, pairwise_gaps, path3_options, path4_options, with_rows
 from user_numbers import extract_user_numbers
 from report import REPORT_PROMPT, render_report, report_schema
 
@@ -223,6 +223,11 @@ TOOLS = [
             "required": ["school_id"],
         },
     },
+    {
+        "name": "compare_careers",
+        "description": "Compare the careers the user confirmed in intake, plus their current job if they included it. Returns a row per career with years of school, median student debt, and BLS median salary, and a high school diploma row for payoff. All figures are computed; use them as given. Takes no arguments: the careers come from intake.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 # The same tools in the OpenAI function-calling format.
@@ -237,6 +242,7 @@ _TOOL_PROGRESS = {
     "get_school_programs": "Pulling program earnings…",
     "compare_education_paths": "Comparing education paths…",
     "compare_programs": "Comparing programs…",
+    "compare_careers": "Comparing careers…",
 }
 
 TOOL_DISPATCH = {
@@ -287,6 +293,7 @@ def _dispatch_for(user_numbers: dict, intake_answers: dict | None = None) -> dic
         **TOOL_DISPATCH,
         "compare_education_paths": lambda args: _compare_education_paths(args["occupation_code"], user_numbers),
         "compare_programs": lambda args: _compare_programs(args["school_id"], intake_answers or {}),
+        "compare_careers": lambda args: path4_options(intake_answers or {}),
     }
     return {name: (lambda args, name=name, func=func: with_rows(name, args, func(args))) for name, func in tools.items()}
 
@@ -299,7 +306,7 @@ Questions by intake path_type:
 - path1: college vs a trade vs working now, for their occupation (use occupation_code from intake when present).
 - path2: how the schools they named, or schools in their location, compare.
 - path3: call compare_programs with the school_id from intake; it returns the programs they confirmed and the occupations each leads to. Nothing else is needed.
-- path4: how the careers they named compare, with their current job unless compare_to_current is "no".
+- path4: call compare_careers; it returns the careers they confirmed and their current job if included. Nothing else is needed.
 - path5: how to get from their current role to their target career.
 """
 
@@ -465,9 +472,15 @@ async def generate_report(
 def _tools_for(intake_answers: dict | None, first_turn: bool) -> list[dict]:
     """Tools the model may call. The first path3 turn, with confirmed programs,
     needs only compare_programs; with other tools on offer, the model went
-    looking for programs that have no earnings data. Follow-ups get every tool."""
-    if first_turn and (intake_answers or {}).get("path_type") == "path3" and _program_list(intake_answers) is not None:
+    looking for programs that have no earnings data. The first path4 turn, with
+    confirmed careers, needs only compare_careers; the model otherwise
+    re-searched each career and dragged in neighbouring occupations.
+    Follow-ups get every tool."""
+    answers = intake_answers or {}
+    if first_turn and answers.get("path_type") == "path3" and _program_list(answers) is not None:
         return [t for t in OPENAI_TOOLS if t["function"]["name"] == "compare_programs"]
+    if first_turn and answers.get("path_type") == "path4" and answers.get("career_matches"):
+        return [t for t in OPENAI_TOOLS if t["function"]["name"] == "compare_careers"]
     return OPENAI_TOOLS
 
 

@@ -328,6 +328,36 @@ def path3_options(school_id: int, program_titles: list[str] | None, program_prio
             "options": rows + list(occupation_rows_by_id.values())}
 
 
+def includes_current_role(intake_answers: dict | None) -> bool:
+    """path4: whether the user's matched current job is one of the careers compared."""
+    answers = intake_answers or {}
+    return bool(answers.get("current_role_code")) and "no" not in (
+        answers.get("include_current_role"), answers.get("compare_to_current"))
+
+
+def path4_options(intake_answers: dict) -> dict:
+    """compare_careers: the careers the user confirmed (career_matches), their
+    current job when they included it, each at its national median, and the
+    high school baseline as the payoff anchor."""
+    careers = [c for c in _parse_list(intake_answers.get("career_matches")) or [] if isinstance(c, dict) and c.get("soc_code")]
+    codes = [c["soc_code"] for c in careers]
+    if includes_current_role(intake_answers):
+        codes.append(intake_answers["current_role_code"])
+    rows, missing = [], []
+    for code in dict.fromkeys(codes):
+        cost = career_cost(code)
+        if cost:
+            rows.append(career_option(cost))
+        else:
+            missing.append(code)
+    if missing:
+        return {"error": f"No salary or education data for {', '.join(missing)}"}
+    if not rows:
+        return {"error": "No confirmed careers in intake"}
+    hs = next(r for r in baseline_rows(None) if r["option_id"] == "baseline:hs")
+    return {"options": rows + [hs]}
+
+
 def with_rows(tool_name: str, args: dict, result):
     """A tool's result with its option rows attached."""
     if not isinstance(result, dict) or "error" in result:
@@ -349,7 +379,8 @@ def candidate_rows(intake_answers: dict | None, data_blocks: list[dict]) -> list
     by_id: dict[str, dict] = {}
     # path3 compares programs with each other and with the occupations they
     # lead to; the report cited baseline gaps without showing the baselines.
-    if (intake_answers or {}).get("path_type") != "path3":
+    # path4's compare_careers returns the one baseline it needs.
+    if (intake_answers or {}).get("path_type") not in ("path3", "path4"):
         for row in baseline_rows(intake_answers):
             by_id[row["option_id"]] = row
     for block in data_blocks:
@@ -416,7 +447,7 @@ def check_rows(intake_answers: dict | None, data_blocks: list[dict]) -> tuple[li
         if not of_kind("occ:"):
             required.append("careers to compare")
         current = answers.get("current_role_code")
-        if current and answers.get("compare_to_current") != "no" and f"occ:{current}" not in ids:
+        if includes_current_role(answers) and f"occ:{current}" not in ids:
             expected.append(f"current job {answers.get('current_role_title') or current}")
 
     return list(dict.fromkeys(required)), expected
