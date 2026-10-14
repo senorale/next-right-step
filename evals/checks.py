@@ -59,15 +59,24 @@ def _same(value: float, exact: float) -> bool:
     return any(value == round(exact, -digits) for digits in (0, 2, 3))
 
 
+# Code-built row tables: heading -> (cell count, debt column, salary column).
+# The financial breakdown on most paths; path4's side-by-side table, which has no payoff.
+ROW_TABLES = {"Financial breakdown": (7, 2, 6), "Side by side": (5, 3, 4)}
+
+
 def _breakdown_rows(report_html: str) -> dict[str, dict]:
-    """Rows of the code-built financial breakdown: name -> median salary and debt."""
-    section = report_html.split("<h2>Financial breakdown</h2>", 1)[-1]
+    """Rows of the code-built row table: name -> median salary and debt."""
     rows = {}
-    for row in re.findall(r"<tr>(.*?)</tr>", section, flags=re.S):
-        cells = [_text(c) for c in re.findall(r"<td>(.*?)</td>", row, flags=re.S)]
-        if len(cells) >= 7:
-            money = [_dollars(c) for c in cells]
-            rows[cells[0]] = {"debt": money[2][0] if money[2] else 0.0, "salary": money[6][0] if money[6] else 0.0}
+    for heading, (width, debt, salary) in ROW_TABLES.items():
+        if f"<h2>{heading}</h2>" not in report_html:
+            continue
+        section = report_html.split(f"<h2>{heading}</h2>", 1)[1].split("</section>", 1)[0]
+        for row in re.findall(r"<tr>(.*?)</tr>", section, flags=re.S):
+            cells = [_text(c) for c in re.findall(r"<td>(.*?)</td>", row, flags=re.S)]
+            if len(cells) >= width:
+                money = [_dollars(c) for c in cells]
+                rows[cells[0]] = {"debt": money[debt][0] if money[debt] else 0.0,
+                                  "salary": money[salary][0] if money[salary] else 0.0}
     return rows
 
 
@@ -187,6 +196,10 @@ def choice_checks(report_html: str, rows: list[dict], expect: dict | None) -> di
                   and _value(r, key) is not None]
         ordered = sorted(values, key=lambda v: v[1], reverse=direction == "desc")
         results["ranked_by"] = [] if values == ordered else [f"order {[n for n, _ in values]}, expected {[n for n, _ in ordered]}"]
+    if "no_payoff" in expect:
+        # path4 compares careers on salary, school, and debt; a payoff would restate path1.
+        results["no_payoff"] = [f"report mentions {w}" for w in ("payoff", "pays off", "Financial breakdown")
+                                if w.lower() in report_html.lower()]
     if "allowed_metrics" in expect:
         allowed = {METRIC_FORMATS[k][0] for k in expect["allowed_metrics"]} | {"Option"}
         body = report_html.split("<h2>Financial breakdown</h2>", 1)[0]
