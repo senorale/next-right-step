@@ -27,8 +27,10 @@ LABELS = {
     "path2": "Comparing Schools", "path3": "Comparing Programs at a School",
     "path4": "Compare Career Tracks", "path5": "Path to a Specific Career",
 }
-POSITIONS = {"working": "Working", "in_college": "In college", "high_school": "In high school", "looking_for_work": "Looking for work"}
-LEVELS = {"some_college": "Some college, no degree", "associate": "Associate's", "bachelor": "Bachelor's", "hs": "High school diploma or GED"}
+# CREDENTIAL_LEVELS and RANK_BY_OPTIONS in src/app/chat/page.tsx
+CREDENTIALS = {"3": "Bachelor's degree", "5": "Master's degree", "6": "Doctoral degree", "7": "Professional degree (JD, MD, PharmD)"}
+RANK_BY = {"debt_to_pay": "Debt compared with pay", "earnings_4yr": "Pay 4 years after graduating",
+           "earnings_1yr": "Pay 1 year after graduating", "debt": "Lowest debt"}
 SITUATIONS = {"deciding": "Deciding between programs", "current": "Already in a program, exploring outcomes",
               "switching": "Thinking about switching programs"}
 # METRIC_TO_SORT in src/app/chat/page.tsx
@@ -88,19 +90,18 @@ def chat_message(a: dict) -> str:
                     lines.append("- Also show the national median for my job")
         lines += ["", "Compare these careers side by side: education required, years of school, median debt, and salary."]
     else:
+        # path5 in buildPrompt (src/app/chat/page.tsx)
         target = with_soc(a.get("target_career_title") or a["target_career"], a.get("target_career_code"))
-        lines += ["- I have a specific career in mind", f"- Target career: {target}"]
-        # startingPointLines in src/app/chat/page.tsx
-        if a.get("current_position"):
-            lines.append(f"- Current position: {POSITIONS[a['current_position']]}")
-        if a.get("education_level"):
-            lines.append(f"- Highest education: {LEVELS[a['education_level']]}")
-        if a.get("current_field"):
-            lines.append(f"- Field of study: {a.get('current_field_normalized') or a['current_field']}")
-        if a.get("current_role"):
-            lines.append(f"- Current job: {current_job(a)}")
-        lines += ["", "Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected "
-                  "salary, time to recoup. Show gap analysis if I have relevant education."]
+        fields = "; ".join(f"{f['title']} (CIP {f['cip']})" for f in json.loads(a["target_fields"]))
+        lines += ["- I want to find the schools whose graduates do best in a specific career", f"- Target career: {target}",
+                  f"- Fields of study: {fields}", f"- Degree level: {CREDENTIALS[a['target_level']]}",
+                  f"- Location: {a.get('target_places') or 'Anywhere in the US'}"]
+        if a.get("min_earnings_4yr"):
+            lines.append(f"- Minimum pay 4 years after graduating: ${int(a['min_earnings_4yr']):,}")
+        if a.get("max_debt"):
+            lines.append(f"- Maximum median debt: ${int(a['max_debt']):,}")
+        lines += [f"- Rank by: {RANK_BY[a['rank_by']]}", "",
+                  "Rank the schools whose graduates in this program do best: pay 1 and 4 years after graduating, and median debt."]
     return "\n".join(lines)
 
 

@@ -150,7 +150,15 @@ async def run_case(case: dict) -> dict:
         for m in final.get("conversation_history", []) if m.get("role") == "assistant"
         for c in m.get("tool_calls") or []
     ]
-    if not captured:
+    if "no_report" in case["expect"]:
+        # Filters that match nothing: no report, and the reply names what emptied it.
+        reply = final.get("response", "")
+        checks = {"no_report": {"pass": not captured, "hits": ["a report input was built"] if captured else []},
+                  "reply_names_filter": {"pass": True, "hits": [
+                      f"reply doesn't mention {w!r}: {reply[:200]}" for w in case["expect"]["no_report"]["reply_mentions"]
+                      if w.lower() not in reply.lower()]}}
+        checks["reply_names_filter"]["pass"] = not checks["reply_names_filter"]["hits"]
+    elif not captured:
         checks = {"report_input_built": {"pass": False, "hits": [f"no report input; reply: {final.get('response', '')[:200]}"]}}
     else:
         checks = check(captured["content"], captured["fixed"], captured["data_blocks"], case["intake_answers"], case["expect"])
