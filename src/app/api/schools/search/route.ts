@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const where = {
+      operating: true,
       ...(name ? { name: { contains: name, mode: 'insensitive' as const } } : {}),
       ...(state ? { state } : {}),
     }

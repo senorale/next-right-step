@@ -44,7 +44,8 @@ export async function GET(_request: NextRequest, ctx: RouteContext<'/api/schools
       }),
     ])
     if (!school) {
-      return NextResponse.json({ error: 'School not found' }, { status: 404 })
+      // Not in Scorecard, or nothing to compare: schools without data aren't stored.
+      return NextResponse.json({ error: 'No earnings data for this school' }, { status: 404 })
     }
 
     // National salary for each program's degree field, via the CIP-SOC crosswalk,

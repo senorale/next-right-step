@@ -107,6 +107,9 @@ model School {
   state                String
   school_type          String // Public | Private nonprofit | Private for-profit
   predominant_degree   Int? // 1=certificate, 2=associate's, 3=bachelor's, 4=graduate
+  highest_degree       Int? // same codes as predominant_degree
+  ope6_id              String? // institution family; branch campuses share it and their program data
+  operating            Boolean         @default(true) // false once Scorecard lists it as closed; searches skip it
   url                  String?
   student_size         Int?
   tuition_in_state     Int?
@@ -127,6 +130,7 @@ model School {
 
   @@index([name])
   @@index([state])
+  @@index([ope6_id])
 }
 
 // Per-school, per-program earnings and debt from the College Scorecard API.

@@ -27,12 +27,15 @@ const INCOME_BRACKETS = ['0-30000', '30001-48000', '48001-75000', '75001-110000'
 
 const SCHOOL_FIELDS = [
   'id',
+  'ope6_id',
   'school.name',
   'school.city',
   'school.state',
   'school.school_url',
   'school.ownership',
   'school.degrees_awarded.predominant',
+  'school.degrees_awarded.highest',
+  'school.operating',
   'latest.student.size',
   'latest.cost.tuition.in_state',
   'latest.cost.tuition.out_of_state',
@@ -78,6 +81,8 @@ export interface SchoolQuery {
   state?: string
   /** school.degrees_awarded.predominant, e.g. 3 = bachelor's */
   predominantDegree?: number
+  /** Lowest school.degrees_awarded.highest to include, e.g. 3 = offers a bachelor's or more */
+  minHighestDegree?: number
   id?: number
   /** Several school ids at once */
   ids?: number[]
@@ -131,6 +136,9 @@ async function fetchPage(
   if (query.predominantDegree !== undefined) {
     params.set('school.degrees_awarded.predominant', String(query.predominantDegree))
   }
+  if (query.minHighestDegree !== undefined) {
+    params.set('school.degrees_awarded.highest__range', `${query.minHighestDegree}..`)
+  }
 
   const resp = await fetch(`${BASE_URL}?${params}`, { cache: 'no-store' })
   if (!resp.ok) {
@@ -148,6 +156,11 @@ export function fetchSchoolsPage(query: SchoolQuery, page: number, perPage = 100
 
 export function fetchProgramsPage(query: SchoolQuery, page: number, perPage = 20): Promise<ScorecardPage> {
   return fetchPage(PROGRAM_FIELDS, query, page, perPage)
+}
+
+/** Schools with their programs in one call, for storing both together. */
+export function fetchSchoolsWithProgramsPage(query: SchoolQuery, page: number, perPage = 20): Promise<ScorecardPage> {
+  return fetchPage(`${SCHOOL_FIELDS},${PROGRAM_FIELDS}`, query, page, perPage)
 }
 
 function repaymentRate3yr(r: ScorecardRow): number | null {
@@ -183,6 +196,9 @@ export function mapSchool(r: ScorecardRow): SchoolRow | null {
     state,
     school_type: OWNERSHIP_LABELS[int(r['school.ownership']) ?? 0] ?? 'Unknown',
     predominant_degree: int(r['school.degrees_awarded.predominant']),
+    highest_degree: int(r['school.degrees_awarded.highest']),
+    ope6_id: str(r.ope6_id),
+    operating: int(r['school.operating']) !== 0,
     url: str(r['school.school_url']),
     student_size: int(r['latest.student.size']),
     tuition_in_state: int(r['latest.cost.tuition.in_state']),
@@ -199,6 +215,13 @@ export function mapSchool(r: ScorecardRow): SchoolRow | null {
   }
 }
 
+/** Whether a school can be compared on its own (Compare schools): school-wide
+ * earnings and debt. Schools without it are stored only for their programs. */
+export function hasSchoolData(row: SchoolRow): boolean {
+  return row.earnings_10yr != null && row.median_debt != null
+}
+
+/** Programs with earnings; one without them can't be compared, so it isn't stored. */
 export function mapPrograms(r: ScorecardRow): SchoolProgramRow[] {
   const schoolId = int(r.id)
   const raw = r[PROGRAM_PREFIX]
@@ -209,14 +232,16 @@ export function mapPrograms(r: ScorecardRow): SchoolProgramRow[] {
     const p = obj(item)
     const cipCode = str(p.code)
     const level = int(get(p, 'credential.level'))
-    if (!cipCode || level === null) continue
+    const earnings1yr = int(get(p, 'earnings.1_yr.overall_median_earnings'))
+    const earnings4yr = int(get(p, 'earnings.4_yr.overall_median_earnings'))
+    if (!cipCode || level === null || (earnings1yr === null && earnings4yr === null)) continue
     rows.set(`${cipCode}:${level}`, {
       school_id: schoolId,
       cip_code: cipCode,
       title: (str(p.title) ?? cipCode).replace(/\.$/, ''),
       credential_level: level,
-      earnings_1yr: int(get(p, 'earnings.1_yr.overall_median_earnings')),
-      earnings_4yr: int(get(p, 'earnings.4_yr.overall_median_earnings')),
+      earnings_1yr: earnings1yr,
+      earnings_4yr: earnings4yr,
       median_debt: int(get(p, 'debt.staff_grad_plus.all.eval_inst.median')),
     })
   }
@@ -245,32 +270,50 @@ export async function insertPrograms(prisma: PrismaClient, rows: SchoolProgramRo
   })
 }
 
-/** Runtime fallback: search Scorecard by name/state, persist matches, return them. */
+/** Insert fetched programs, replacing the figures of rows already stored, since
+ * Scorecard revises them each release. One statement per call. */
+export async function upsertPrograms(prisma: PrismaClient, rows: SchoolProgramRow[]): Promise<void> {
+  if (rows.length === 0) return
+  const col = <K extends keyof SchoolProgramRow>(k: K) => rows.map((r) => r[k] ?? null)
+  await prisma.$executeRaw`
+    INSERT INTO "SchoolProgram" (id, school_id, cip_code, title, credential_level,
+      earnings_1yr, earnings_4yr, median_debt, fetched_at, updated_at)
+    SELECT gen_random_uuid()::text, t.*, NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC'
+    FROM unnest(${col('school_id')}::int[], ${col('cip_code')}::text[], ${col('title')}::text[],
+      ${col('credential_level')}::int[], ${col('earnings_1yr')}::int[], ${col('earnings_4yr')}::int[],
+      ${col('median_debt')}::int[])
+      AS t(school_id, cip_code, title, credential_level, earnings_1yr, earnings_4yr, median_debt)
+    ON CONFLICT (school_id, cip_code, credential_level) DO UPDATE SET
+      title = EXCLUDED.title, earnings_1yr = EXCLUDED.earnings_1yr, earnings_4yr = EXCLUDED.earnings_4yr,
+      median_debt = EXCLUDED.median_debt, fetched_at = NOW() AT TIME ZONE 'UTC', updated_at = NOW() AT TIME ZONE 'UTC'`
+}
+
+/** Runtime fallback: search Scorecard by name/state, persist the matches that
+ * have school-wide data, return those. */
 export async function fetchAndStoreSchools(
   prisma: PrismaClient,
   query: { name?: string; state?: string }
 ): Promise<SchoolRow[]> {
   const page = await fetchSchoolsPage(query, 0, 25)
-  const rows = page.results.map(mapSchool).filter((r): r is SchoolRow => r !== null)
+  const rows = page.results.map(mapSchool).filter((r): r is SchoolRow => r !== null && hasSchoolData(r))
   if (rows.length > 0) await upsertSchools(prisma, rows)
   return rows
 }
 
-/** Runtime fallback: fetch one school's programs, persist them, return them. */
+/** Runtime fallback: fetch one school's programs, persist them, return them.
+ * A school not yet stored is stored with them, if it has any data to compare. */
 export async function fetchAndStorePrograms(
   prisma: PrismaClient,
   schoolId: number
 ): Promise<SchoolProgramRow[]> {
+  const page = await fetchSchoolsWithProgramsPage({ id: schoolId }, 0, 1)
+  const school = page.results.map(mapSchool).find((r): r is SchoolRow => r !== null)
+  const rows = page.results.flatMap(mapPrograms)
   const exists = await prisma.school.findUnique({ where: { school_id: schoolId }, select: { school_id: true } })
   if (!exists) {
-    const schools = await fetchSchoolsPage({ id: schoolId }, 0, 1)
-    const rows = schools.results.map(mapSchool).filter((r): r is SchoolRow => r !== null)
-    if (rows.length === 0) return []
-    await upsertSchools(prisma, rows)
+    if (!school || (rows.length === 0 && !hasSchoolData(school))) return []
+    await upsertSchools(prisma, [school])
   }
-
-  const page = await fetchProgramsPage({ id: schoolId }, 0, 1)
-  const rows = page.results.flatMap(mapPrograms)
   await insertPrograms(prisma, rows)
   return rows
 }

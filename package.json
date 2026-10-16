@@ -10,6 +10,7 @@
     "create-db": "ts-node scripts/create-entries-from-csv.ts",
     "seed-tuition": "TS_NODE_COMPILER_OPTIONS='{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' ts-node --transpile-only scripts/seed-tuition-medians.ts",
     "seed-schools": "TS_NODE_COMPILER_OPTIONS='{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' ts-node --transpile-only scripts/seed-schools.ts",
+    "seed-programs": "TS_NODE_COMPILER_OPTIONS='{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}' ts-node --transpile-only scripts/seed-school-programs.ts",
     "dev:api": "cd api && venv/bin/uvicorn main:app --reload --port 8000",
     "dev:all": "concurrently -k -n web,api -c blue,green \"npm:dev\" \"npm:dev:api\""
   },

@@ -33,13 +33,13 @@ The **FAQ** (`/faq`) explains every data source and calculation.
 | Data | Source | How it's loaded |
 |---|---|---|
 | Salaries by occupation | [BLS Occupational Employment and Wage Statistics](https://www.bls.gov/oes/), May 2024 national medians | Seeded from `data/national_data.csv` |
-| Schools (net price by income, outcomes, graduates' median debt, earnings) | [College Scorecard](https://collegescorecard.ed.gov/data/) API | Bachelor's schools seeded; others fetched on first search and stored |
-| Programs at a school | College Scorecard API | Fetched the first time a school is opened, then stored |
+| Schools (net price by income, outcomes, graduates' median debt, earnings) | [College Scorecard](https://collegescorecard.ed.gov/data/) API | Schools awarding a bachelor's or higher seeded; others fetched on first search and stored |
+| Programs at a school (earnings 1 and 4 years after graduating, median debt) | College Scorecard API | Seeded for every seeded school; other schools fetched the first time they're opened, then stored |
 | Median debt by degree field and credential | College Scorecard Field of Study file | Aggregated across schools at seed time |
 | Degree fields to occupations | [NCES CIP-SOC crosswalk](https://nces.ed.gov/ipeds/cipcode/resources.aspx?y=56) | Seeded from `data/cip_soc_crosswalk.csv` |
 | Typical years of school per occupation | [O*NET Web Services](https://services.onetcenter.org/) (USDOL/ETA) | Stored per occupation, backfilled from the API |
 
-The files in `data/` are seed inputs only. The app and the counselor API read everything from the database and never open them; you only need them to seed a fresh database. Seed scripts upsert and never delete.
+The files in `data/` are seed inputs only. The app and the counselor API read everything from the database and never open them; you only need them to seed a fresh database. Seed scripts upsert. Schools and programs with nothing to compare aren't stored: a program needs earnings 1 or 4 years after graduating, and a school needs school-wide earnings and debt or at least one such program. Live fetches follow the same rule.
 
 ## How the numbers work
 
@@ -91,7 +91,8 @@ Prereqs: Node 20+, Python 3.13, PostgreSQL, and API keys for College Scorecard (
 4. Seed the database. The College Scorecard CSVs are large and gitignored; download `Most-Recent-Cohorts-Field-of-Study.csv` and `Most-Recent-Cohorts-Institution.csv` from [College Scorecard](https://collegescorecard.ed.gov/data/) into `data/` first.
    ```bash
    npm run create-db     # occupations and BLS salaries
-   npm run seed-schools  # bachelor's-degree schools from the Scorecard API
+   npm run seed-schools   # schools awarding a bachelor's or higher, from the Scorecard API
+   npm run seed-programs  # every program with earnings at schools awarding a bachelor's or higher (run after seed-schools)
    npm run seed-tuition  # national tuition medians (needs Most-Recent-Cohorts-Institution.csv in data/)
    TS_NODE_COMPILER_OPTIONS='{"module":"CommonJS","moduleResolution":"node"}' \
      node --env-file=.env -r ts-node/register/transpile-only scripts/seed-cip-soc-crosswalk.ts

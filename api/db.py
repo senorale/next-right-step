@@ -215,12 +215,15 @@ _INCOME_BRACKETS = ["0-30000", "30001-48000", "48001-75000", "75001-110000", "11
 
 _SCHOOL_FIELDS = ",".join([
     "id",
+    "ope6_id",
     "school.name",
     "school.city",
     "school.state",
     "school.school_url",
     "school.ownership",
     "school.degrees_awarded.predominant",
+    "school.degrees_awarded.highest",
+    "school.operating",
     "latest.student.size",
     "latest.cost.tuition.in_state",
     "latest.cost.tuition.out_of_state",
@@ -308,6 +311,9 @@ def _map_school(r: dict) -> dict | None:
         "state": state,
         "school_type": _OWNERSHIP_LABELS.get(r.get("school.ownership"), "Unknown"),
         "predominant_degree": _int(r.get("school.degrees_awarded.predominant")),
+        "highest_degree": _int(r.get("school.degrees_awarded.highest")),
+        "ope6_id": r.get("ope6_id") or None,
+        "operating": _int(r.get("school.operating")) != 0,
         "url": r.get("school.school_url") or None,
         "student_size": _int(r.get("latest.student.size")),
         "tuition_in_state": _int(r.get("latest.cost.tuition.in_state")),
@@ -327,9 +333,9 @@ def _map_school(r: dict) -> dict | None:
 
 
 _SCHOOL_COLUMNS = [
-    "school_id", "name", "city", "state", "school_type", "predominant_degree", "url", "student_size",
-    "tuition_in_state", "tuition_out_of_state", "avg_net_price", "net_price_by_income", "graduation_rate",
-    "median_debt", "earnings_6yr", "earnings_10yr", "admission_rate", "retention_rate", "repayment_rate_3yr",
+    "school_id", "name", "city", "state", "school_type", "predominant_degree", "highest_degree", "ope6_id",
+    "operating", "url", "student_size", "tuition_in_state", "tuition_out_of_state", "avg_net_price",
+    "net_price_by_income", "graduation_rate", "median_debt", "earnings_6yr", "earnings_10yr", "admission_rate", "retention_rate", "repayment_rate_3yr",
 ]
 
 
@@ -371,11 +377,11 @@ def _query_local_schools(
     # Browsing (by state) keeps to schools with full data, and to those with a
     # 70%+ graduation rate when enough of them match. A school the user names is
     # always found; callers check its data.
-    where = [] if name else [
+    where = ["operating"] + ([] if name else [
         "median_debt IS NOT NULL",
         "earnings_10yr IS NOT NULL",
         "avg_net_price IS NOT NULL",
-    ]
+    ])
     params: dict = {"limit": MAX_SCHOOL_RESULTS, "min_grad": MIN_GRADUATION_RATE}
     if name:
         where.append("name ILIKE :name")
@@ -506,7 +512,7 @@ def search_schools(
                    {"filters": filters, "status": resp.status_code, "body": resp.text[:500]})
         return {"error": f"Scorecard API returned {resp.status_code}", "results": []}
 
-    rows = [s for s in (_map_school(r) for r in resp.json().get("results", [])) if s is not None]
+    rows = [s for s in (_map_school(r) for r in resp.json().get("results", [])) if s is not None and _has_school_data(s)]
     _insert_schools(rows, update_existing=True)
     schools = _query_local_schools(*args)
     if not schools:
@@ -544,13 +550,22 @@ def _nested(d: dict, path: str):
     return d
 
 
+def _has_school_data(school: dict) -> bool:
+    """Whether a school can be compared on its own (Compare schools): school-wide
+    earnings and debt. Mirrors hasSchoolData in src/lib/scorecard.ts."""
+    return school.get("earnings_10yr") is not None and school.get("median_debt") is not None
+
+
 def _map_programs(school_id: int, raw: list) -> list[dict]:
-    """Scorecard programs -> SchoolProgram rows. Mirrors mapPrograms in src/lib/scorecard.ts."""
+    """Scorecard programs with earnings -> SchoolProgram rows; one without them
+    can't be compared, so it isn't stored. Mirrors mapPrograms in src/lib/scorecard.ts."""
     rows: dict[str, dict] = {}
     for p in raw or []:
         cip_code = p.get("code")
         level = _int(_nested(p, "credential.level"))
-        if not cip_code or level is None:
+        earnings_1yr = _int(_nested(p, "earnings.1_yr.overall_median_earnings"))
+        earnings_4yr = _int(_nested(p, "earnings.4_yr.overall_median_earnings"))
+        if not cip_code or level is None or (earnings_1yr is None and earnings_4yr is None):
             continue
         rows[f"{cip_code}:{level}"] = {
             "id": str(uuid.uuid4()),
@@ -558,8 +573,8 @@ def _map_programs(school_id: int, raw: list) -> list[dict]:
             "cip_code": cip_code,
             "title": (p.get("title") or cip_code).rstrip("."),
             "credential_level": level,
-            "earnings_1yr": _int(_nested(p, "earnings.1_yr.overall_median_earnings")),
-            "earnings_4yr": _int(_nested(p, "earnings.4_yr.overall_median_earnings")),
+            "earnings_1yr": earnings_1yr,
+            "earnings_4yr": earnings_4yr,
             "median_debt": _int(_nested(p, "debt.staff_grad_plus.all.eval_inst.median")),
         }
     return list(rows.values())
@@ -568,6 +583,7 @@ def _map_programs(school_id: int, raw: list) -> list[dict]:
 def _ensure_programs(school_id: int) -> str | None:
     """Fetch and store a school's programs the first time they are needed, same as
     the app's /api/schools/[id]/programs. Additive: stored rows are never changed.
+    Only programs with earnings are stored, and the school only if it has some.
     Returns an error message, or None when programs are available locally."""
     with _connect_with_retry() as conn:
         stored = conn.execute(
@@ -598,9 +614,11 @@ def _ensure_programs(school_id: int) -> str | None:
     school = _map_school(results[0]) if results else None
     if school is None:
         return f"No school found with id {school_id}"
-    _insert_schools([school], update_existing=False)
-
     programs = _map_programs(school_id, results[0].get(_PROGRAM_PREFIX))
+    # Schools with nothing to compare aren't stored.
+    if not programs and not _has_school_data(school):
+        return f"No earnings data for {school['name']}"
+    _insert_schools([school], update_existing=False)
     if programs:
         now = "(NOW() AT TIME ZONE 'UTC')"
         with engine.begin() as conn:

@@ -1,7 +1,12 @@
-// Seeds School from the College Scorecard API: every operating school whose
-// predominant degree is a bachelor's. Safe to rerun; rows are upserted.
+// Seeds School from the College Scorecard API: every operating school that
+// awards a bachelor's or higher. Filtering on the highest degree, not the
+// predominant one, keeps graduate-only schools (medical, law) and universities
+// that mostly award certificates or associate's degrees but have bachelor's
+// programs (Weber State, BYU-Idaho). Only schools with school-wide earnings
+// and debt are stored here; seed-school-programs adds the ones that have only
+// program data. Safe to rerun; rows are upserted.
 import { PrismaClient } from '@prisma/client'
-import { fetchSchoolsPage, mapSchool, upsertSchools, type SchoolRow } from '../src/lib/scorecard'
+import { fetchSchoolsPage, hasSchoolData, mapSchool, upsertSchools, type SchoolRow } from '../src/lib/scorecard'
 
 process.loadEnvFile()
 
@@ -19,9 +24,9 @@ async function main() {
   let skipped = 0
 
   while (page * PER_PAGE < total) {
-    const result = await fetchSchoolsPage({ predominantDegree: BACHELOR }, page, PER_PAGE)
+    const result = await fetchSchoolsPage({ minHighestDegree: BACHELOR }, page, PER_PAGE)
     total = result.total
-    const rows = result.results.map(mapSchool).filter((r): r is SchoolRow => r !== null)
+    const rows = result.results.map(mapSchool).filter((r): r is SchoolRow => r !== null && hasSchoolData(r))
     skipped += result.results.length - rows.length
     await upsertSchools(prisma, rows)
     saved += rows.length
@@ -30,7 +35,7 @@ async function main() {
     await sleep(DELAY_MS)
   }
 
-  console.log(`Done. ${saved} schools saved, ${skipped} skipped (missing name/city/state).`)
+  console.log(`Done. ${saved} schools saved, ${skipped} skipped (missing name/city/state, or no school-wide earnings and debt).`)
 }
 
 main()
