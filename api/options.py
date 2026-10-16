@@ -19,7 +19,7 @@ import json
 import logging
 
 from career_cost import BACHELOR_SALARY, BACHELOR_YEARS, HS_SALARY, career_cost, career_option, national_bachelors_debt
-from db import cip_occupations, school_programs
+from db import PROGRAM_RANK, cip_occupations, program_spread, rank_programs, school_programs
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +27,13 @@ MAX_OCCUPATION_ROWS = 3  # per search: the top matches with a salary
 MAX_PROGRAM_ROWS = 6  # per call: the highest-earning matches
 TOP_PROGRAMS = 4  # path3 "not sure": the school's top bachelor's programs
 PROGRAM_OCCUPATIONS = 3  # path3: occupations shown per program, highest paid first
+TOP_SCHOOLS = 10  # path5: schools ranked for one career
 MAX_CANDIDATES = 20  # rows sent to the report model (pairwise gaps grow fast)
 
 AMOUNT_METRICS = ("avg_net_price", "tuition_in_state", "tuition_out_of_state", "median_debt",
                   "earnings_6yr_after_entry", "earnings_10yr_after_entry", "student_size")
 RATE_METRICS = ("graduation_rate", "admission_rate", "retention_rate", "loan_repayment_rate_3yr")
+RATIO_METRICS = ("debt_to_4yr_earnings",)
 SCHOOL_YEARS = {"certificate": 1, "associate": 2, "bachelor": 4, "graduate": 2}
 # Length of the program itself, by Scorecard credential level.
 PROGRAM_YEARS = {1: 1, 2: 2, 3: 4, 4: 1, 5: 2, 6: 5, 7: 4, 8: 1}
@@ -398,6 +400,95 @@ def path4_options(intake_answers: dict) -> dict:
     return {"options": rows}
 
 
+def _whole_dollars(value) -> int | None:
+    try:
+        n = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def path5_filters(intake_answers: dict) -> dict:
+    """path5: the program and school filters the user confirmed in intake."""
+    fields = [f for f in _parse_list(intake_answers.get("target_fields")) or [] if isinstance(f, dict) and f.get("cip")]
+    states = [s for s in (intake_answers.get("target_states") or "").split(",") if s]
+    rank_by = intake_answers.get("rank_by")
+    return {
+        "fields": fields,
+        "level": int(intake_answers["target_level"]) if str(intake_answers.get("target_level") or "").isdigit() else None,
+        "states": states or None,
+        "rank_by": rank_by if rank_by in PROGRAM_RANK else "debt_to_pay",
+        "min_earnings_4yr": _whole_dollars(intake_answers.get("min_earnings_4yr")),
+        "max_debt": _whole_dollars(intake_answers.get("max_debt")),
+    }
+
+
+def _ranked_program_row(p: dict, years) -> dict:
+    """One school's program for path5. Salary is its graduates' earnings 4
+    years out (else 1 year); cost is its median federal loan debt."""
+    salary = p["earnings_4yr"] or p["earnings_1yr"]
+    metrics = {"earnings_1yr_after_graduation": p["earnings_1yr"], "earnings_4yr_after_graduation": p["earnings_4yr"],
+               "median_debt": p["median_debt"]}
+    if p["earnings_1yr"] and p["earnings_4yr"]:
+        metrics["earnings_growth_1yr_to_4yr"] = p["earnings_4yr"] - p["earnings_1yr"]
+    if p["median_debt"] and p["earnings_4yr"]:
+        metrics["debt_to_4yr_earnings"] = round(p["median_debt"] / p["earnings_4yr"], 2)
+    return {
+        "option_id": f"program:{p['school_id']}:{p['cip_code']}:{p['credential_level']}",
+        "name": p["school_name"],
+        "short_label": p["school_name"],
+        "state": p["state"],
+        "program": f"{p['title']} ({p['credential']})",
+        "education": f"{p['credential']} in {p['title']} at {p['school_name']}, {p['city']}, {p['state']}",
+        "years_in_school": years,
+        "debt": p["median_debt"],
+        "cost_basis": "Median federal loan debt of this program's graduates (College Scorecard)" if p["median_debt"]
+        else "This program reports no debt",
+        "expected_salary": salary,
+        "salary_basis": "College Scorecard median earnings of this program's graduates "
+        + ("4 years" if p["earnings_4yr"] else "1 year") + " after graduating",
+        "metrics": {k: v for k, v in metrics.items() if v is not None},
+    }
+
+
+def _no_match(f: dict, career: str) -> str:
+    """Why no school matched: the filters the user set, in their words."""
+    where = f" in {', '.join(f['states'])}" if f["states"] else ""
+    limits = ([f"pay at least ${f['min_earnings_4yr']:,} 4 years after graduating"] if f["min_earnings_4yr"] else []) + (
+        [f"median debt at most ${f['max_debt']:,}"] if f["max_debt"] else [])
+    fields = ", ".join(x.get("title") or x["cip"] for x in f["fields"])
+    return (f"No schools{where} have a {fields} program for {career} with "
+            + (" and ".join(limits) if limits else "earnings data at this degree level")
+            + ". Try " + ("loosening " + ("that limit" if len(limits) == 1 else "those limits") if limits
+                          else "another degree level or location") + ".")
+
+
+def path5_options(intake_answers: dict) -> dict:
+    """rank_schools_for_career: the top schools for the user's target career,
+    ranked on its program (the fields and level they confirmed) by rank_by,
+    one row per school family. Also returns the occupation's BLS median and
+    typical years, and the program's national spread, which the report shows
+    next to the ranked schools."""
+    f = path5_filters(intake_answers)
+    code = intake_answers.get("target_career_code")
+    if not code or not f["fields"] or not f["level"]:
+        return {"error": "No confirmed career, field of study, or degree level in intake"}
+    cost = career_cost(code)
+    if not cost:
+        return {"error": f"No salary or education data for {code}"}
+    cips = [x["cip"] for x in f["fields"]]
+    programs = rank_programs(cips, f["level"], f["states"], f["rank_by"], f["min_earnings_4yr"], f["max_debt"], TOP_SCHOOLS)
+    if not programs:
+        return {"error": _no_match(f, cost["name"]), "no_match": True}
+    return {
+        "occupation": {"soc_code": code, "title": cost["name"], "median_salary": cost["salary"],
+                       "typical_years_of_school": cost["years_in_school"]},
+        "rank_by": f["rank_by"],
+        "national_spread": program_spread(cips, f["level"]),
+        "options": [_ranked_program_row(p, cost["years_in_school"]) for p in programs],
+    }
+
+
 def with_rows(tool_name: str, args: dict, result):
     """A tool's result with its option rows attached."""
     if not isinstance(result, dict) or "error" in result:
@@ -419,8 +510,9 @@ def candidate_rows(intake_answers: dict | None, data_blocks: list[dict]) -> list
     by_id: dict[str, dict] = {}
     # path3 compares programs with each other and with the occupations they
     # lead to; the report cited baseline gaps without showing the baselines.
-    # path4 compares careers side by side, with no payoff to anchor.
-    if (intake_answers or {}).get("path_type") not in ("path3", "path4"):
+    # path4 compares careers side by side, with no payoff to anchor; path5
+    # compares schools' programs for one career with each other.
+    if (intake_answers or {}).get("path_type") not in ("path3", "path4", "path5"):
         for row in baseline_rows(intake_answers):
             by_id[row["option_id"]] = row
     for block in data_blocks:
@@ -477,17 +569,18 @@ def check_rows(intake_answers: dict | None, data_blocks: list[dict]) -> tuple[li
         if not titles and not programs:
             required.append(f"programs at {answers.get('school_matched_name') or answers.get('school_name') or 'the school'}")
 
-    elif path in ("path4", "path5"):
-        if path == "path4":
-            careers = [c for c in _parse_list(answers.get("career_matches")) or [] if isinstance(c, dict)]
-            wanted = [(c.get("soc_code"), c.get("title")) for c in careers]
-        else:
-            wanted = [(answers.get("target_career_code"), answers.get("target_career_title") or answers.get("target_career"))]
-        required += [f"career {title or code}" for code, title in wanted if code and f"occ:{code}" not in ids]
+    elif path == "path4":
+        careers = [c for c in _parse_list(answers.get("career_matches")) or [] if isinstance(c, dict)]
+        required += [f"career {c.get('title') or c.get('soc_code')}" for c in careers
+                     if c.get("soc_code") and f"occ:{c['soc_code']}" not in ids]
         if not of_kind("occ:"):
             required.append("careers to compare")
         current = answers.get("current_role_title") or answers.get("current_role_code")
         expected += [f"current job {current}" for i in current_job_ids(answers) if i not in ids]
+
+    elif path == "path5":
+        if not of_kind("program:"):
+            required.append(f"schools for {answers.get('target_career_title') or answers.get('target_career') or 'the career'}")
 
     return list(dict.fromkeys(required)), expected
 
@@ -517,6 +610,7 @@ def pairwise_gaps(rows: list[dict]) -> list[dict]:
                 higher = a if va > vb else b
                 diff = abs(va - vb)
                 gap[f"higher_{label}"] = higher["option_id"]
-                gap[f"{label}_difference"] = diff if label == "years" or label in RATE_METRICS else round(diff)
+                gap[f"{label}_difference"] = (diff if label == "years" or label in RATE_METRICS
+                                              else round(diff, 2) if label in RATIO_METRICS else round(diff))
             gaps.append(gap)
     return gaps

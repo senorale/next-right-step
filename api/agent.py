@@ -29,7 +29,7 @@ from db import (
     search_occupations,
 )
 from career_cost import CASHIER_CODE, ELECTRICIAN_CODE, path1_options
-from options import allowed_metrics, candidate_rows, check_rows, pairwise_gaps, path3_options, path4_options, with_rows
+from options import allowed_metrics, candidate_rows, check_rows, pairwise_gaps, path3_options, path4_options, path5_options, with_rows
 from user_numbers import extract_user_numbers
 from report import REPORT_PROMPT, render_report, report_schema
 
@@ -228,6 +228,11 @@ TOOLS = [
         "description": "Compare the careers the user confirmed in intake, plus their current job if they included it. Returns a row per career with years of school, median student debt, and BLS median salary. All figures are computed; use them as given. Takes no arguments: the careers come from intake.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "rank_schools_for_career",
+        "description": "Rank schools for the career the user confirmed in intake, on the program (fields of study and degree level), location, limits, and ranking they chose. Returns the top schools, one row each with graduates' pay 1 and 4 years after graduating and median debt, plus the career's BLS median and the program's national spread. All figures are computed; use them as given. Takes no arguments: everything comes from intake.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 # The same tools in the OpenAI function-calling format.
@@ -243,6 +248,7 @@ _TOOL_PROGRESS = {
     "compare_education_paths": "Comparing education paths…",
     "compare_programs": "Comparing programs…",
     "compare_careers": "Comparing careers…",
+    "rank_schools_for_career": "Ranking schools…",
 }
 
 TOOL_DISPATCH = {
@@ -294,6 +300,7 @@ def _dispatch_for(user_numbers: dict, intake_answers: dict | None = None) -> dic
         "compare_education_paths": lambda args: _compare_education_paths(args["occupation_code"], user_numbers),
         "compare_programs": lambda args: _compare_programs(args["school_id"], intake_answers or {}),
         "compare_careers": lambda args: path4_options(intake_answers or {}),
+        "rank_schools_for_career": lambda args: path5_options(intake_answers or {}),
     }
     return {name: (lambda args, name=name, func=func: with_rows(name, args, func(args))) for name, func in tools.items()}
 
@@ -307,7 +314,7 @@ Questions by intake path_type:
 - path2: how the schools they named, or schools in their location, compare.
 - path3: call compare_programs with the school_id from intake; it returns the programs they confirmed and the occupations each leads to. Nothing else is needed.
 - path4: call compare_careers; it returns the careers they confirmed and their current job if included. Nothing else is needed.
-- path5: how to get from their current role to their target career.
+- path5: call rank_schools_for_career; it returns the top schools for their target career on the program, location, and limits they chose. Nothing else is needed.
 """
 
 
@@ -475,12 +482,15 @@ def _tools_for(intake_answers: dict | None, first_turn: bool) -> list[dict]:
     looking for programs that have no earnings data. The first path4 turn, with
     confirmed careers, needs only compare_careers; the model otherwise
     re-searched each career and dragged in neighbouring occupations.
-    Follow-ups get every tool."""
+    The first path5 turn needs only rank_schools_for_career: everything it
+    ranks on comes from intake. Follow-ups get every tool."""
     answers = intake_answers or {}
     if first_turn and answers.get("path_type") == "path3" and _program_list(answers) is not None:
         return [t for t in OPENAI_TOOLS if t["function"]["name"] == "compare_programs"]
     if first_turn and answers.get("path_type") == "path4" and answers.get("career_matches"):
         return [t for t in OPENAI_TOOLS if t["function"]["name"] == "compare_careers"]
+    if first_turn and answers.get("path_type") == "path5" and answers.get("target_fields"):
+        return [t for t in OPENAI_TOOLS if t["function"]["name"] == "rank_schools_for_career"]
     return OPENAI_TOOLS
 
 
@@ -594,7 +604,8 @@ async def run_agent_stream(
                     tools_total += time.perf_counter() - t0
                     messages.append({"role": "tool", "tool_call_id": tool_id, "content": json.dumps(result, default=_json_default)})
                     if isinstance(result, dict) and "error" in result:
-                        tool_errors.append({"tool": tool_name, "args": tool_input, "error": result["error"]})
+                        tool_errors.append({"tool": tool_name, "args": tool_input, "error": result["error"],
+                                            **({"no_match": True} if result.get("no_match") else {})})
                     elif isinstance(result, dict) and "options" in result and not result["options"]:
                         # Results came back, but none has the data a comparison needs.
                         tool_errors.append({"tool": tool_name, "args": tool_input, "error": "No comparable rows"})
@@ -629,6 +640,18 @@ async def run_agent_stream(
     if intake_answers:
         required, expected = check_rows(intake_answers, data_blocks)
         details = {"path": intake_answers.get("path_type"), "tool_errors": tool_errors, "intake_answers": intake_answers}
+        no_match = next((e["error"] for e in tool_errors if e.get("no_match")), None)
+        if required and no_match:
+            # The user's filters left nothing to rank: an answer, not a failure.
+            yield {
+                "event": "complete",
+                "response": no_match,
+                "report_html": "",
+                "report_status": "skipped",
+                "tool_errors": tool_errors,
+                "conversation_history": messages,
+            }
+            return
         if required:
             send_alert(f"Missing required data ({intake_answers.get('path_type')})", {"missing": required, **details})
             yield {

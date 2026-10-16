@@ -783,3 +783,91 @@ def occupations_by_title(titles: list[str]) -> list[dict]:
         found = {r.name.lower(): {"soc_code": r.occupation_code, "title": r.name, "annual_salary": float(r.annual_salary)}
                  for r in rows}
     return [found[t] for t in dict.fromkeys(wanted) if t in found]
+
+
+# path5 rank_by -> (ORDER BY on SchoolProgram p, columns a program needs to be ranked)
+PROGRAM_RANK = {
+    "debt_to_pay": ("p.median_debt::float / p.earnings_4yr ASC", ["earnings_4yr", "median_debt"]),
+    "earnings_4yr": ("p.earnings_4yr DESC", ["earnings_4yr"]),
+    "earnings_1yr": ("p.earnings_1yr DESC", ["earnings_1yr"]),
+    "debt": ("p.median_debt ASC", ["median_debt", "earnings_4yr"]),
+}
+
+# Branch campuses share one family's program data (ope6_id); a school with no
+# ope6_id is its own family. in_state: the campus is in a chosen state, or no
+# states were chosen.
+_PROGRAM_FAMILIES = """
+    fam AS (
+        SELECT s.school_id, s.name, s.city, s.state, s.student_size,
+               coalesce(s.ope6_id, s.school_id::text) AS fam,
+               (cast(:states AS text[]) IS NULL OR s.state = ANY(cast(:states AS text[]))) AS in_state
+        FROM "School" s WHERE s.operating
+    )"""
+
+
+def rank_programs(cip_codes: list[str], level: int, states: list[str] | None, rank_by: str,
+                  min_earnings_4yr: int | None, max_debt: int | None, limit: int) -> list[dict]:
+    """path5: the top programs in these fields at one credential level, one per
+    school family. A family counts when any campus is in the chosen states. Its
+    figures come from its best program by rank_by (the in-state campus's row
+    first, then the largest campus's); its name is the in-state campus, else
+    the largest one."""
+    order, needs = PROGRAM_RANK[rank_by]
+    present = " AND ".join(f"p.{c} IS NOT NULL" for c in needs)
+    with _connect_with_retry() as conn:
+        rows = conn.execute(text(f"""
+            WITH {_PROGRAM_FAMILIES},
+            progs AS (
+                SELECT p.*, f.fam, f.in_state, f.student_size FROM "SchoolProgram" p
+                JOIN fam f ON f.school_id = p.school_id
+                WHERE p.cip_code = ANY(:cips) AND p.credential_level = :level AND {present}
+                  AND (cast(:min_pay AS int) IS NULL OR p.earnings_4yr >= cast(:min_pay AS int))
+                  AND (cast(:max_debt AS int) IS NULL OR p.median_debt <= cast(:max_debt AS int))
+            ),
+            best AS (
+                SELECT DISTINCT ON (p.fam) p.* FROM progs p
+                WHERE EXISTS (SELECT 1 FROM fam f WHERE f.fam = p.fam AND f.in_state)
+                ORDER BY p.fam, {order}, p.in_state DESC, p.student_size DESC NULLS LAST
+            ),
+            shown AS (
+                SELECT DISTINCT ON (f.fam) f.fam, f.name, f.city, f.state FROM fam f
+                WHERE f.fam IN (SELECT fam FROM best)
+                ORDER BY f.fam, f.in_state DESC, f.student_size DESC NULLS LAST
+            )
+            SELECT p.school_id, p.cip_code, p.title, p.credential_level, p.earnings_1yr, p.earnings_4yr,
+                   p.median_debt, sh.name AS school_name, sh.city, sh.state
+            FROM best p JOIN shown sh ON sh.fam = p.fam
+            ORDER BY {order}, p.school_id
+            LIMIT :limit
+        """), {"cips": list(cip_codes), "level": level, "states": states, "min_pay": min_earnings_4yr,
+               "max_debt": max_debt, "limit": limit})
+        return [{**dict(r._mapping), "credential": _CREDENTIAL_LEVELS.get(r.credential_level)} for r in rows]
+
+
+def program_spread(cip_codes: list[str], level: int) -> dict:
+    """path5: where every school's program in these fields sits nationally, one
+    program per school family (its largest campus's): count, min, median, max
+    of 1-yr and 4-yr earnings and median debt."""
+    stats = ", ".join(
+        f"count({c}) AS {c}_count, min({c}) AS {c}_min, "
+        f"percentile_cont(0.5) WITHIN GROUP (ORDER BY {c}) AS {c}_median, max({c}) AS {c}_max"
+        for c in ("earnings_1yr", "earnings_4yr", "median_debt"))
+    with _connect_with_retry() as conn:
+        r = conn.execute(text(f"""
+            WITH {_PROGRAM_FAMILIES},
+            one AS (
+                SELECT DISTINCT ON (f.fam, p.cip_code) p.earnings_1yr, p.earnings_4yr, p.median_debt
+                FROM "SchoolProgram" p JOIN fam f ON f.school_id = p.school_id
+                WHERE p.cip_code = ANY(:cips) AND p.credential_level = :level
+                  AND (p.earnings_1yr IS NOT NULL OR p.earnings_4yr IS NOT NULL)
+                ORDER BY f.fam, p.cip_code, f.student_size DESC NULLS LAST
+            )
+            SELECT count(*) AS programs, {stats} FROM one
+        """), {"cips": list(cip_codes), "level": level, "states": None}).first()
+    m = r._mapping
+    spread = {"programs": m["programs"]}
+    for c in ("earnings_1yr", "earnings_4yr", "median_debt"):
+        if m[f"{c}_count"]:
+            spread[c] = {k: round(m[f"{c}_{k}"]) if k != "count" else m[f"{c}_{k}"]
+                         for k in ("count", "min", "median", "max")}
+    return spread
