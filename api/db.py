@@ -847,7 +847,8 @@ def rank_programs(cip_codes: list[str], level: int, states: list[str] | None, ra
 def program_spread(cip_codes: list[str], level: int) -> dict:
     """path5: where every school's program in these fields sits nationally, one
     program per school family (its largest campus's): count, min, median, max
-    of 1-yr and 4-yr earnings and median debt."""
+    of 1-yr and 4-yr earnings and median debt, each over the programs that
+    report it."""
     stats = ", ".join(
         f"count({c}) AS {c}_count, min({c}) AS {c}_min, "
         f"percentile_cont(0.5) WITHIN GROUP (ORDER BY {c}) AS {c}_median, max({c}) AS {c}_max"
@@ -862,10 +863,10 @@ def program_spread(cip_codes: list[str], level: int) -> dict:
                   AND (p.earnings_1yr IS NOT NULL OR p.earnings_4yr IS NOT NULL)
                 ORDER BY f.fam, p.cip_code, f.student_size DESC NULLS LAST
             )
-            SELECT count(*) AS programs, {stats} FROM one
+            SELECT {stats} FROM one
         """), {"cips": list(cip_codes), "level": level, "states": None}).first()
     m = r._mapping
-    spread = {"programs": m["programs"]}
+    spread = {}
     for c in ("earnings_1yr", "earnings_4yr", "median_debt"):
         if m[f"{c}_count"]:
             spread[c] = {k: round(m[f"{c}_{k}"]) if k != "count" else m[f"{c}_{k}"]

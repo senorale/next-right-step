@@ -361,6 +361,11 @@ def build_report_input(intake_answers: dict, data_blocks: list[dict]) -> tuple[d
         rows = [{**r, "metrics": {k: v for k, v in r["metrics"].items() if k in allowed}} if "metrics" in r else r
                 for r in rows]
     content = {"intake_answers": intake_answers, "rows": rows, "gaps": pairwise_gaps(rows)}
+    ranked = next((b["data"] for b in data_blocks if b.get("type") == "rank_schools_for_career"
+                   and isinstance(b.get("data"), dict) and "options" in b["data"]), None)
+    if ranked:
+        # path5: the career and the program's national spread, which the report compares the schools with.
+        content["career"] = {k: ranked[k] for k in ("occupation", "rank_by", "national_spread")}
     return content, rows
 
 
@@ -457,7 +462,7 @@ async def write_report(content: dict, agent_text: str):
     yield _progress("Finalizing your report…", "rendering", RENDERING_PERCENT)
     # The headline doubles as the chat reply.
     reply = parsed.get("headline") or agent_text
-    parsed = {"summary": reply, "html": render_report(parsed, rows, content.get("intake_answers"))}
+    parsed = {"summary": reply, "html": render_report(parsed, rows, content.get("intake_answers"), content.get("career"))}
 
     logger.info("Report parsed OK: summary=%d chars, html=%d chars", len(parsed.get("summary", "")), len(parsed.get("html", "")))
     yield {"event": "report", "report": parsed}

@@ -53,7 +53,7 @@ Per path:
 - path2: show only the schools they named (not other campuses a search returned), or for a location the schools found. Code orders them by rank_by and limits table_metrics to what they chose.
 - path3: show the programs compare_programs returned and the occupations in each program's leads_to; code orders the programs by program_priority. Compare each program's graduates' earnings with the national median salary of the occupations it leads to, and the programs with each other.
 - path4: show every row compare_careers returned. Compare the careers with each other on median salary, typical years of school, and median debt; there is no payoff, so never mention one. The row named "Your current job" is the user's job: compare each career with it and call it "your current job", not by its occupation title. Its salary is the national median unless the row is marked user_numbers (their own pay: say "your pay").
-- path5: a roadmap from their current role to the target: ordered steps with the typical time for each.
+- path5: schools ranked for one career on its program. Code ranked the rows by the user's rank_by: put every row in option_ids in the order given. Compare the top schools with each other and with the program's national median (career.national_spread), and say how much the school matters: how far the lowest and highest schools nationally sit from the median. Pay 1 year after graduating is not starting salary (some programs enroll people already working in the field): never call it starting salary. table_metrics: leave empty; code shows every figure in its own table. Code also states the data caveats (federal loans only, whole-institution figures, programs too small to report), so limitations name other ones.
 """
 
 _TEXT = {"type": "string"}
@@ -108,6 +108,8 @@ METRIC_FORMATS = {
     "student_size": ("Students", "number"),
     "bright_outlook": ("Bright outlook (O*NET)", "bool"),
     "career_options": ("Occupations it leads to", "number"),
+    "earnings_growth_1yr_to_4yr": ("Pay growth, 1 to 4 yrs", "usd"),
+    "debt_to_4yr_earnings": ("Debt / 4-yr pay", "ratio"),
 }
 
 
@@ -123,7 +125,7 @@ def _num(value, default: float = 0.0) -> float:
 
 
 def _usd(value: float) -> str:
-    return f"${value:,.0f}"
+    return f"-${-value:,.0f}" if value < 0 else f"${value:,.0f}"
 
 
 def _fmt(value: float, unit: str) -> str:
@@ -133,6 +135,8 @@ def _fmt(value: float, unit: str) -> str:
         return f"{value:.0f}%"
     if unit == "years":
         return f"{value:.1f} yrs"
+    if unit == "ratio":
+        return f"{value:.2f}"
     return f"{value:,.0f}"
 
 
@@ -332,6 +336,121 @@ def _comparison_section(options: list[dict]) -> str:
     )
 
 
+PATH5_CAVEATS = [
+    "Debt is the median federal student loan debt of each program's graduates, for loans taken for that program "
+    "(College Scorecard). Private loans and loans for earlier degrees aren't counted.",
+    "Figures cover the whole institution: branch campuses report together, so the campus named stands for all of them.",
+    "Some programs enroll people already working in the field (for example RN-to-BSN programs for working nurses), "
+    "so their graduates' pay reflects that experience.",
+    "Earnings and debt cover graduates who received federal financial aid. Programs with too few of them to report "
+    "aren't listed.",
+]
+# Credential levels 1-2: certificates and associate's degrees.
+PATH5_SUB_BACHELORS_CAVEAT = "Only schools that also award a bachelor's degree or higher are included, so community colleges are left out."
+# Spread rows: (national_spread key, row metric, label, unit).
+SPREAD_MEASURES = [
+    ("earnings_1yr", "earnings_1yr_after_graduation", "Pay 1 year after graduating", "usd"),
+    ("earnings_4yr", "earnings_4yr_after_graduation", "Pay 4 years after graduating", "usd"),
+    ("median_debt", "median_debt", "Median debt", "usd"),
+]
+
+
+def _ranking_section(options: list[dict], career: dict) -> str:
+    """path5: the career, then every ranked school's program in code's order."""
+    occ = career.get("occupation") or {}
+    years = _num(occ.get("typical_years_of_school"))
+    header = _table(
+        ["Career", "Typical years of school", "Median salary (BLS)"],
+        [[occ.get("title", ""), "None" if years == 0 else f"{years:g}", _usd(_num(occ.get("median_salary")))]],
+    )
+    rows = []
+    for o in options:
+        m = o.get("metrics") or {}
+        rows.append([o.get("name", ""), o.get("state") or "", o.get("program") or o.get("education", "")]
+                    + [_metric(m.get(k), METRIC_FORMATS[k][1]) for k in
+                       ("earnings_1yr_after_graduation", "earnings_4yr_after_graduation", "earnings_growth_1yr_to_4yr",
+                        "median_debt", "debt_to_4yr_earnings")])
+    table = _table(["School", "State", "Program", "Pay 1 yr after", "Pay 4 yrs after", "Growth", "Median debt",
+                    "Debt / 4-yr pay"], rows)
+    return (
+        "<section><h2>Schools ranked</h2>"
+        f"{header}"
+        f'<p class="note">Ranked by {_esc(RANK_LABELS.get(career.get("rank_by"), "debt compared with pay"))}. '
+        "Pay is College Scorecard median earnings of each program's graduates; the career's salary is the BLS "
+        "median across all experience levels.</p>"
+        f"{table}{_cap_note([{'name': occ.get('title', ''), 'expected_salary': occ.get('median_salary')}])}</section>"
+    )
+
+
+RANK_LABELS = {
+    "debt_to_pay": "debt compared with pay 4 years after graduating (lowest first)",
+    "earnings_4yr": "pay 4 years after graduating (highest first)",
+    "earnings_1yr": "pay 1 year after graduating (highest first)",
+    "debt": "median debt (lowest first)",
+}
+
+
+def _dot_chart(title: str, metric: str, stats: dict, options: list[dict], unit: str, source: str) -> str:
+    """Each ranked school as a dot on the national range (lowest to highest,
+    with the median marked) for one measure."""
+    shown = [o for o in options if (o.get("metrics") or {}).get(metric) is not None]
+    if not shown or not stats:
+        return ""
+    left, right, top, row_h = 150, 90, 20, 30
+    width = 700
+    plot_w = width - left - right
+    plot_h = len(shown) * row_h
+    height = top + plot_h + 50
+    max_v = _nice_max(_num(stats.get("max")))
+    x = lambda v: left + plot_w * _num(v) / max_v
+    lo, mid, hi = x(stats.get("min")), x(stats.get("median")), x(stats.get("max"))
+    parts = [f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{_esc(title)}">']
+    for i in range(5):
+        gx = left + plot_w * i / 4
+        parts.append(f'<line x1="{gx:.1f}" y1="{top}" x2="{gx:.1f}" y2="{top + plot_h}" class="grid"/>')
+        parts.append(f'<text x="{gx:.1f}" y="{top + plot_h + 16}" class="tick" text-anchor="middle">{_esc(_fmt(max_v * i / 4, unit))}</text>')
+    parts.append(f'<rect x="{lo:.1f}" y="{top}" width="{hi - lo:.1f}" height="{plot_h}" class="range"/>')
+    parts.append(f'<line x1="{mid:.1f}" y1="{top}" x2="{mid:.1f}" y2="{top + plot_h}" class="median"/>')
+    for i, o in enumerate(shown):
+        value = o["metrics"][metric]
+        cy = top + i * row_h + row_h / 2
+        label = o.get("short_label") or o.get("name", "")
+        parts.append(f'<text x="{left - 8}" y="{cy + 4:.1f}" class="lbl" text-anchor="end"><title>{_esc(label)}</title>{_esc(_short(label))}</text>')
+        parts.append(f'<circle cx="{x(value):.1f}" cy="{cy:.1f}" r="6" class="dot"/>')
+        parts.append(f'<text x="{x(value) + 10:.1f}" y="{cy + 4:.1f}" class="val">{_esc(_fmt(value, unit))}</text>')
+    parts.append(f'<text x="{left + plot_w / 2:.1f}" y="{height - 6}" class="axis" text-anchor="middle">{_esc(title)}</text>')
+    parts.append("</svg>")
+    return f'<figure><figcaption>{_esc(title)}<span class="src">{_esc(source)}</span></figcaption>{"".join(parts)}</figure>'
+
+
+def _spread_section(options: list[dict], career: dict) -> str:
+    """path5: where the ranked schools sit among every school's program nationally."""
+    spread = career.get("national_spread") or {}
+    rows = [[label, _usd(_num(st["min"])), _usd(_num(st["median"])), _usd(_num(st["max"])), f"{st['count']:,}"]
+            for key, _, label, _ in SPREAD_MEASURES if (st := spread.get(key))]
+    if not rows:
+        return ""
+    charts = "".join(
+        _dot_chart(label, metric, spread.get(key), options, unit,
+                   "Shaded: lowest to highest school nationally; line: national median")
+        for key, metric, label, unit in SPREAD_MEASURES if key != "earnings_1yr")
+    return (
+        "<section><h2>How much the school matters</h2>"
+        '<p class="note">Every school reporting this program nationally, one program per school.</p>'
+        + _table(["Measure", "Lowest school", "Median", "Highest school", "Schools reporting"], rows)
+        + charts + "</section>"
+    )
+
+
+def _caveats_section(options: list[dict]) -> str:
+    """path5: data limits that hold for every ranking, stated by code."""
+    caveats = list(PATH5_CAVEATS)
+    if any(o["option_id"].rsplit(":", 1)[-1] in ("1", "2") for o in options):
+        caveats.append(PATH5_SUB_BACHELORS_CAVEAT)
+    return ('<section><h2>About these figures</h2><ul class="note">'
+            + "".join(f"<li>{_esc(c)}</li>" for c in caveats) + "</ul></section>")
+
+
 SALARY_SOURCES = {
     "BLS median annual wage": "BLS OEWS May 2024 median annual wage (occupations)",
     "BLS median weekly earnings x 52": "BLS median weekly earnings x 52 (high school diploma, bachelor's degree)",
@@ -412,6 +531,9 @@ figcaption{font-weight:600;margin:0 0 4px}
 svg{width:100%;height:auto;font-size:12px}
 svg .grid{stroke:#e5e7eb}
 svg .bar{fill:#2563eb}
+svg .range{fill:#dbeafe}
+svg .median{stroke:#1e3a8a;stroke-width:2;stroke-dasharray:4 3}
+svg .dot{fill:#2563eb}
 svg .lbl,svg .val{fill:#1f2937}
 svg .tick{fill:#6b7280;font-size:11px}
 svg .axis{fill:#374151;font-weight:600}
@@ -430,11 +552,13 @@ SAVE_BUTTON = (
 )
 
 
-def render_report(spec: dict, rows: list[dict], intake_answers: dict | None = None) -> str:
+def render_report(spec: dict, rows: list[dict], intake_answers: dict | None = None, career: dict | None = None) -> str:
     """rows: every option row the model could pick (options.candidate_rows).
     The report shows the ones it picked with their own numbers, in the user's
     rank_by order when they chose one, else the model's; metric tables keep to
-    the metrics the user chose."""
+    the metrics the user chose. path5 shows every ranked school in code's
+    order, with career (the tool's occupation and national spread)."""
+    path = (intake_answers or {}).get("path_type")
     by_id = {r["option_id"]: r for r in rows}
     options = [by_id[i] for i in dict.fromkeys(spec.get("option_ids") or []) if i in by_id]
     options = rank_rows(options, intake_answers)
@@ -457,11 +581,19 @@ def render_report(spec: dict, rows: list[dict], intake_answers: dict | None = No
         "<h1>Your Next Right Step report</h1>",
         f'<p class="headline">{_esc(spec.get("headline", ""))}</p>',
     ]
-    body.append(_salary_chart(options, with_user_pay=(intake_answers or {}).get("path_type") == "path4"))
-    body.extend(_section(s, options) for s in sections)
-    if (intake_answers or {}).get("path_type") == "path4":
-        body.append(_comparison_section(options))
+    if path == "path5":
+        # The ranking is code's, so every school shows, in its order.
+        options = [r for r in rows if r["option_id"].startswith("program:")]
+        body.append(_ranking_section(options, career or {}))
+        body.extend(_section({**s, "table_metrics": []}, options) for s in sections)
+        body.append(_spread_section(options, career or {}))
+        body.append(_caveats_section(options))
     else:
+        body.append(_salary_chart(options, with_user_pay=path == "path4"))
+        body.extend(_section(s, options) for s in sections)
+    if path == "path4":
+        body.append(_comparison_section(options))
+    elif path != "path5":
         body.append(_financial_section(options, baseline_salary, baseline_label))
     if limitations:
         body.append(

@@ -60,8 +60,9 @@ def _same(value: float, exact: float) -> bool:
 
 
 # Code-built row tables: heading -> (cell count, debt column, salary column).
-# The financial breakdown on most paths; path4's side-by-side table, which has no payoff.
-ROW_TABLES = {"Financial breakdown": (7, 2, 6), "Side by side": (5, 3, 4)}
+# The financial breakdown on most paths; path4's side-by-side table, which has no
+# payoff; path5's ranked schools (salary: pay 4 years after graduating).
+ROW_TABLES = {"Financial breakdown": (7, 2, 6), "Side by side": (5, 3, 4), "Schools ranked": (8, 6, 4)}
 
 
 def _breakdown_rows(report_html: str) -> dict[str, dict]:
@@ -81,8 +82,9 @@ def _breakdown_rows(report_html: str) -> dict[str, dict]:
 
 
 def _metric_rows(report_html: str) -> dict[str, dict]:
-    """Rows of the metric tables above the financial breakdown: name -> {column: value}."""
-    body = report_html.split("<h2>Financial breakdown</h2>", 1)[0]
+    """Rows of the metric tables above the financial breakdown: name -> {column: value}.
+    path5's national spread table names measures, not options, so it's left out."""
+    body = report_html.split("<h2>Financial breakdown</h2>", 1)[0].split("<h2>How much the school matters</h2>", 1)[0]
     rows: dict[str, dict] = {}
     for table in re.findall(r"<table>(.*?)</table>", body, flags=re.S):
         heads = [_text(h) for h in re.findall(r"<th>(.*?)</th>", table)]
@@ -95,6 +97,9 @@ def _metric_rows(report_html: str) -> dict[str, dict]:
     return rows
 
 
+GENERIC_LAST_WORDS = {"university", "college", "institute", "school", "campus", "technology", "sciences"}
+
+
 def _aliases(name: str) -> list[str]:
     """Words a sentence uses for a row, e.g. "Lawyers" -> "lawyer"."""
     base = re.sub(r"\(.*?\)", "", name).lower()
@@ -102,8 +107,11 @@ def _aliases(name: str) -> list[str]:
         return ["high school", "diploma"]
     if "bachelor" in base:
         return ["bachelor"]
-    last = re.findall(r"[a-z]+", base)[-1]
-    return [last.rstrip("s")]
+    words = re.findall(r"[a-z]+", base)
+    if words[-1] in GENERIC_LAST_WORDS:
+        # "Harvard University": the last word names every school.
+        return [base.strip()]
+    return [words[-1].rstrip("s")]
 
 
 def _wrong_gaps(sentence: str, rows: dict[str, dict]) -> list[str]:
@@ -200,6 +208,14 @@ def choice_checks(report_html: str, rows: list[dict], expect: dict | None) -> di
         # path4 compares careers on salary, school, and debt; a payoff would restate path1.
         results["no_payoff"] = [f"report mentions {w}" for w in ("payoff", "pays off", "Financial breakdown")
                                 if w.lower() in report_html.lower()]
+    if "required_text" in expect:
+        # Code-built text every report on this path carries (path5's data caveats).
+        text = html.unescape(report_html)
+        results["required_text"] = [f"missing {t!r}" for t in expect["required_text"] if t not in text]
+    if "forbidden_words" in expect:
+        # Words the model's text must not use (path5: "starting salary" for pay 1 year out).
+        written = " ".join(prose("", report_html)).lower()
+        results["forbidden_words"] = [f"says {w!r}" for w in expect["forbidden_words"] if w.lower() in written]
     if "allowed_metrics" in expect:
         allowed = {METRIC_FORMATS[k][0] for k in expect["allowed_metrics"]} | {"Option"}
         body = report_html.split("<h2>Financial breakdown</h2>", 1)[0]

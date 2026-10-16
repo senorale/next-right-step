@@ -12,6 +12,7 @@ from pathlib import Path
 
 import run  # noqa: F401  loads .env and puts api/ on the import path
 from run import agent
+import db
 import options
 
 EVALS = Path(__file__).resolve().parent
@@ -41,6 +42,18 @@ def path4(case_id: str, intake: dict, careers: list[tuple[str, str, str]], expec
               "career_matches": json.dumps([{"typed": t, "soc_code": c, "title": n} for t, c, n in careers]), **intake}
     return {"id": case_id, "intake": intake, "calls": [("compare_careers", {})], "expect": expect}
 
+
+def path5(case_id: str, intake: dict, expect: dict) -> dict:
+    """A path5 case: the rank_schools_for_career call a correct agent makes,
+    with the career's programs as the target_career check stores them."""
+    intake = {"path_type": "path5", "career_programs": json.dumps(db.career_programs(intake["target_career_code"])),
+              "location_scope": "states" if intake.get("target_states") else "national", "requirements": "none", **intake}
+    return {"id": case_id, "intake": intake, "calls": [("rank_schools_for_career", {})], "expect": expect}
+
+
+# Every path5 report: the code-built caveats, no payoff, and pay 1 year out never called starting salary.
+PATH5_EXPECT = {"no_payoff": True, "forbidden_words": ["starting salary"],
+                "required_text": ["federal student loan debt", "whole institution", "already working in the field"]}
 
 NO_JOB = {"include_current_role": "no"}
 RETAIL_MANAGER = {"include_current_role": "yes", "current_role": "retail store manager", "current_role_code": "41-1011",
@@ -121,6 +134,28 @@ CASES = [
           {"required_options": ["occ:47-2111", "occ:41-1011"], "no_payoff": True}),
     path4("path4-current-job-pay", RETAIL_MANAGER_PAY, [ELECTRICIAN],
           {"required_options": ["occ:47-2111", "current:pay", "occ:41-1011"], "no_payoff": True}),
+    # path5: schools ranked for one career; code orders them by rank_by.
+    path5("path5-lawyer-national",
+          {"target_career": "lawyer", "target_career_code": "23-1011", "target_career_title": "Lawyers",
+           "target_fields": "2201", "target_level": "7", "rank_by": "debt_to_pay"},
+          {**PATH5_EXPECT, "required_options": ["program:166027:2201:7", "program:215062:2201:7", "program:134130:2201:7"],
+           "ranked_by": ["debt_to_4yr_earnings", "asc", "program:"]}),
+    path5("path5-nurse-florida",
+          {"target_career": "registered nurse", "target_career_code": "29-1141", "target_career_title": "Registered Nurses",
+           "target_level": "3", "target_location": "Florida", "target_places": "Florida", "target_states": "FL",
+           "rank_by": "earnings_4yr"},
+          {**PATH5_EXPECT, "min_options": ["program:", 10], "ranked_by": ["earnings_4yr_after_graduation", "desc", "program:"]}),
+    path5("path5-software-california",
+          {"target_career": "software developer", "target_career_code": "15-1252", "target_career_title": "Software Developers",
+           "target_fields": "1107|1409", "target_level": "3", "target_location": "California", "target_places": "California",
+           "target_states": "CA", "rank_by": "debt_to_pay"},
+          {**PATH5_EXPECT, "required_options": ["program:243744:1107:3", "program:110662:1409:3"],
+           "ranked_by": ["debt_to_4yr_earnings", "asc", "program:"]}),
+    path5("path5-pharmacist-max-debt",
+          {"target_career": "pharmacist", "target_career_code": "29-1051", "target_career_title": "Pharmacists",
+           "target_fields": "5120", "target_level": "7", "requirements": "max_debt", "max_debt": "$50,000",
+           "max_debt_value": "50000", "rank_by": "debt_to_pay"},
+          {**PATH5_EXPECT, "required_options": ["program:215293:5120:7", "program:212106:5120:7"]}),
 ]
 
 
