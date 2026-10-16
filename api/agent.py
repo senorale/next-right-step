@@ -489,7 +489,7 @@ def _tools_for(intake_answers: dict | None, first_turn: bool) -> list[dict]:
         return [t for t in OPENAI_TOOLS if t["function"]["name"] == "compare_programs"]
     if first_turn and answers.get("path_type") == "path4" and answers.get("career_matches"):
         return [t for t in OPENAI_TOOLS if t["function"]["name"] == "compare_careers"]
-    if first_turn and answers.get("path_type") == "path5" and answers.get("target_fields"):
+    if first_turn and answers.get("path_type") == "path5" and answers.get("career_programs"):
         return [t for t in OPENAI_TOOLS if t["function"]["name"] == "rank_schools_for_career"]
     return OPENAI_TOOLS
 

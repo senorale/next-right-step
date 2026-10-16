@@ -408,18 +408,52 @@ def _whole_dollars(value) -> int | None:
     return n if n > 0 else None
 
 
+def path5_programs(intake_answers: dict) -> dict:
+    """career_programs from the target_career check: {"fields": [{"cip",
+    "title", "levels": {level: schools}}], "typical_level"}."""
+    try:
+        parsed = json.loads(intake_answers.get("career_programs") or "{}")
+    except json.JSONDecodeError:
+        return {"fields": [], "typical_level": None}
+    return parsed if isinstance(parsed, dict) else {"fields": [], "typical_level": None}
+
+
+def path5_choices(intake_answers: dict) -> tuple[list[dict], list[str], int | None]:
+    """The fields and degree level path5 ranks on (getFieldStep and
+    getLevelStep in src/app/chat/page.tsx): the fields the user picked, else
+    every field with programs at the career's typical level (else every
+    field); the level they picked, else the typical level when those fields
+    have it, else the level with the most schools. Also the levels offered."""
+    programs = path5_programs(intake_answers)
+    fields = [f for f in programs.get("fields") or [] if isinstance(f, dict) and f.get("cip") and f.get("levels")]
+    typical = str(programs.get("typical_level") or "")
+    picked = [c for c in (intake_answers.get("target_fields") or "").split("|") if c]
+    chosen = ([f for f in fields if f["cip"] in picked] if picked else
+              [f for f in fields if typical in f["levels"]] or fields)
+    schools: dict[str, int] = {}
+    for f in chosen:
+        for level, n in f["levels"].items():
+            schools[level] = schools.get(level, 0) + n
+    levels = sorted(schools, key=int)
+    level = intake_answers.get("target_level")
+    if level not in schools:
+        level = typical if typical in schools else max(levels, key=lambda l: schools[l], default=None)
+    return chosen, levels, int(level) if level else None
+
+
 def path5_filters(intake_answers: dict) -> dict:
     """path5: the program and school filters the user confirmed in intake."""
-    fields = [f for f in _parse_list(intake_answers.get("target_fields")) or [] if isinstance(f, dict) and f.get("cip")]
+    fields, _, level = path5_choices(intake_answers)
     states = [s for s in (intake_answers.get("target_states") or "").split(",") if s]
     rank_by = intake_answers.get("rank_by")
+    limits = intake_answers.get("requirements") or ""
     return {
         "fields": fields,
-        "level": int(intake_answers["target_level"]) if str(intake_answers.get("target_level") or "").isdigit() else None,
-        "states": states or None,
+        "level": level,
+        "states": states if intake_answers.get("location_scope") == "states" and states else None,
         "rank_by": rank_by if rank_by in PROGRAM_RANK else "debt_to_pay",
-        "min_earnings_4yr": _whole_dollars(intake_answers.get("min_earnings_4yr")),
-        "max_debt": _whole_dollars(intake_answers.get("max_debt")),
+        "min_earnings_4yr": _whole_dollars(intake_answers.get("min_pay_value")) if limits in ("min_pay", "both") else None,
+        "max_debt": _whole_dollars(intake_answers.get("max_debt_value")) if limits in ("max_debt", "both") else None,
     }
 
 

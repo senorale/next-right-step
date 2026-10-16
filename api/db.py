@@ -871,3 +871,45 @@ def program_spread(cip_codes: list[str], level: int) -> dict:
             spread[c] = {k: round(m[f"{c}_{k}"]) if k != "count" else m[f"{c}_{k}"]
                          for k in ("count", "min", "median", "max")}
     return spread
+
+
+def career_programs(occupation_code: str) -> dict:
+    """path5 intake: the fields of study linked to an occupation (CIP-SOC
+    crosswalk) with, per credential level, how many school families report
+    earnings for that program; and the level its typical years of school
+    point to (None when no school is required)."""
+    with _connect_with_retry() as conn:
+        rows = conn.execute(text(f"""
+            WITH {_PROGRAM_FAMILIES}
+            SELECT c.code, c.title, p.credential_level, count(DISTINCT f.fam) AS schools
+            FROM "OccupationSubCategory" o
+            JOIN "CipOccupation" co ON co.occupation_id = o.id
+            JOIN "CipCode" c ON c.id = co.cip_id
+            JOIN "SchoolProgram" p ON p.cip_code = c.code
+            JOIN fam f ON f.school_id = p.school_id
+            WHERE o.occupation_code = :code AND (p.earnings_1yr IS NOT NULL OR p.earnings_4yr IS NOT NULL)
+            GROUP BY c.code, c.title, p.credential_level
+            ORDER BY c.code, p.credential_level
+        """), {"code": occupation_code, "states": None}).all()
+        years = conn.execute(text(
+            'SELECT typical_years_of_school FROM "OccupationSubCategory" WHERE occupation_code = :code LIMIT 1'
+        ), {"code": occupation_code}).scalar()
+    fields: dict[str, dict] = {}
+    for r in rows:
+        fields.setdefault(r.code, {"cip": r.code, "title": r.title, "levels": {}})["levels"][str(r.credential_level)] = r.schools
+    return {"fields": list(fields.values()), "typical_level": _typical_level(_safe_float(years))}
+
+
+def _typical_level(years: float | None) -> int | None:
+    """Scorecard credential level for an occupation's typical years of school."""
+    if not years:
+        return None
+    if years <= 1:
+        return 1
+    if years <= 2:
+        return 2
+    if years <= 4:
+        return 3
+    if years <= 6:
+        return 5
+    return 7

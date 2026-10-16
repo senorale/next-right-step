@@ -32,7 +32,7 @@ import logging
 import re
 
 from alerts import send_alert
-from db import occupations_by_title, school_program_titles, search_occupations, search_schools
+from db import career_programs, occupations_by_title, school_program_titles, search_occupations, search_schools
 from options import school_missing
 from llm import MODEL, client
 from user_numbers import _numbers_in, extract_user_numbers
@@ -210,18 +210,36 @@ async def validate_single_occupation(value: str, answers: dict) -> dict:
 
 
 async def validate_target_career(value: str, answers: dict) -> dict:
-    """Path5 maps the way to one career; several belong in path4."""
-    return await _validate_one_occupation(
+    """Path5 ranks schools for one career; several belong in path4. Each
+    matched career carries its programs (career_programs: fields of study and
+    how many schools report earnings at each degree level), which the field
+    and level steps offer. A career no school reports earnings for can't be
+    ranked, so it's turned away."""
+    result = await _validate_one_occupation(
         value, "target_career", ("target_career_code", "target_career_title"),
-        ask="Which career do you want to reach? Name one, like pharmacist or electrician.",
+        ask="Which career do you want to reach? Name one, like pharmacist or software developer.",
         switch_clear=["target_career"],
-        what="This maps out the path to one career.",
+        what="This ranks schools for one career.",
     )
+    matched = [c for c in result.get("choices") or [] if (c.get("set") or {}).get("target_career_code")]
+    if not matched:
+        return result
+    programs = await asyncio.gather(*(asyncio.to_thread(career_programs, c["set"]["target_career_code"]) for c in matched))
+    kept = []
+    for choice, found in zip(matched, programs):
+        if found["fields"]:
+            choice["set"]["career_programs"] = json.dumps(found)
+            kept.append(choice)
+    if not kept:
+        title = matched[0]["set"]["target_career_title"] if len(matched) == 1 else "those careers"
+        return {"status": "fix", "message": f"No schools report graduates' earnings for programs that lead to {title}. "
+                                            "Try a related career."}
+    result["choices"] = [c for c in result["choices"] if c in kept or not (c.get("set") or {}).get("target_career_code")]
+    return result
 
 
 async def validate_current_role(value: str, answers: dict) -> dict:
-    """The user's current job (path4 and path5), matched like any occupation.
-    On path5 a role with no match at all is kept as typed; on path4 it is a
+    """The user's current job (path4), matched like any occupation. It is a
     row in the comparison, so it needs salary data like any career."""
     keys = ("current_role_code", "current_role_title")
     named = await extract_occupations(value)
@@ -241,9 +259,7 @@ async def validate_current_role(value: str, answers: dict) -> dict:
     if match:
         return _confirm(f"Your current job: {match['title']} ({_salary(match)}).", _occupation_set(match, keys))
     if not candidates:
-        if answers.get("path_type") == "path4":
-            return {"status": "fix", "message": f"I couldn't find salary data for \"{name}\". Try another name for your job."}
-        return _confirm(f"Your current job: {name}.", {"current_role_title": name})
+        return {"status": "fix", "message": f"I couldn't find salary data for \"{name}\". Try another name for your job."}
     return {
         "status": "confirm",
         "message": f"Which of these is closest to \"{name}\"?",
@@ -572,10 +588,19 @@ async def validate_programs(value: str, answers: dict) -> dict:
     return {"status": "fix", "message": message, "choices": choices}
 
 
-US_STATES = set(
-    "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND "
-    "OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY AS GU MP PR VI".split()
-)
+US_STATES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California", "CO": "Colorado",
+    "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia", "FL": "Florida", "GA": "Georgia",
+    "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan",
+    "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York", "NC": "North Carolina",
+    "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania",
+    "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas",
+    "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming", "AS": "American Samoa", "GU": "Guam", "MP": "Northern Mariana Islands",
+    "PR": "Puerto Rico", "VI": "U.S. Virgin Islands",
+}
 PLACES_SCHEMA = {
     "type": "object",
     "properties": {
@@ -619,27 +644,40 @@ async def validate_target_location(value: str, answers: dict) -> dict:
                     {"target_places": "; ".join(labels), "target_states": states})
 
 
-FIELD_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "field": {"type": "string", "description": "The field of study, as a common program name, or empty if none"},
-    },
-    "required": ["field"],
-    "additionalProperties": False,
-}
-FIELD_PROMPT = (
-    "Give the field of study the user names, as a common program or major name (psych -> Psychology, "
-    "CS -> Computer Science). Use Undeclared if they haven't picked one. Empty if they name no field."
-)
+async def validate_school_states(value: str, answers: dict) -> dict:
+    """Path5: the states to rank schools in. A city counts as its whole state:
+    program data covers the whole institution, so a city match says little."""
+    parsed = await _ask_json("places", PLACES_SCHEMA, PLACES_PROMPT, value)
+    places = [p for p in (parsed or {}).get("places") or []
+              if isinstance(p, dict) and (p.get("state") or "").upper() in US_STATES]
+    if parsed is None:
+        places = [{"kind": "state", "state": s} for s in re.findall(r"\b[A-Z]{2}\b", value) if s in US_STATES]
+    if not places:
+        return {"status": "fix", "message": "Which US states? Name at least one, like Florida or Texas."}
+    states = list(dict.fromkeys(p["state"].upper() for p in places))
+    labels = [US_STATES[s] for s in states]
+    cities = [p["name"].strip() for p in places if p.get("kind") == "city"]
+    note = f" (cities count as their whole state: {', '.join(cities)})" if cities else ""
+    return _confirm(f"I'll rank schools in {'; '.join(labels)}{note}.",
+                    {"target_places": "; ".join(labels), "target_states": ",".join(states)})
 
 
-async def validate_current_field(value: str, answers: dict) -> dict:
-    """What the user studies or studied (path4 and path5)."""
-    parsed = await _ask_json("field", FIELD_SCHEMA, FIELD_PROMPT, value)
-    field = value.strip() if parsed is None else (parsed.get("field") or "").strip()
-    if not field:
-        return {"status": "fix", "message": "What's the field? Name it, like psychology, nursing, or undeclared."}
-    return _confirm(f"Field of study: {field}.", {"current_field_normalized": field})
+def _validate_amount(value: str, key: str, message: str, low: int, high: int) -> dict:
+    """One dollar amount ("80k", "$80,000"), confirmed with message (the
+    amount fills its {}) and stored as {key}_value."""
+    amounts = [n for n in _numbers_in(value) if n >= 1]
+    if len(amounts) != 1 or not low <= amounts[0] <= high:
+        return {"status": "fix", "message": f"Enter one amount between ${low:,} and ${high:,}."}
+    amount = round(amounts[0])
+    return _confirm(message.format(f"${amount:,}"), {f"{key}_value": str(amount)})
+
+
+async def validate_min_pay(value: str, answers: dict) -> dict:
+    return _validate_amount(value, "min_pay", "Only schools whose graduates earn at least {} 4 years after graduating.", 10_000, 500_000)
+
+
+async def validate_max_debt(value: str, answers: dict) -> dict:
+    return _validate_amount(value, "max_debt", "Only schools whose graduates' median debt is at most {}.", 1_000, 300_000)
 
 
 VALIDATORS = {
@@ -652,8 +690,10 @@ VALIDATORS = {
     ("path4", "careers_to_compare"): validate_careers_to_compare,
     ("path4", "current_salary"): validate_salary,
     ("path5", "target_career"): validate_target_career,
-    (None, "current_field"): validate_current_field,
-    (None, "current_role"): validate_current_role,
+    ("path5", "target_location"): validate_school_states,
+    ("path5", "min_pay"): validate_min_pay,
+    ("path5", "max_debt"): validate_max_debt,
+    ("path4", "current_role"): validate_current_role,
 }
 
 

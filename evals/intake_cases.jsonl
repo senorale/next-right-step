@@ -22,9 +22,8 @@
 {"id": "careers-only-one", "key": "careers_to_compare", "value": "nurse", "answers": {"path_type": "path4"}, "expect": {"status": "fix"}}
 {"id": "target-career-clear", "key": "target_career", "value": "electrician", "answers": {"path_type": "path5"}, "expect": {"status": "confirm", "set": {"target_career_code": "47-2111"}}}
 {"id": "target-career-multiple", "key": "target_career", "value": "lawyer or electrician", "answers": {"path_type": "path5"}, "expect": {"status": "confirm", "switch_to": "path4", "draft": {"careers_to_compare": "lawyer, electrician"}}}
-{"id": "current-role-clear", "key": "current_role", "value": "electrician", "answers": {"path_type": "path5", "current_position": "working"}, "expect": {"status": "confirm", "set": {"current_role_code": "47-2111"}}}
-{"id": "current-role-unknown", "key": "current_role", "value": "stay at home parent", "answers": {"path_type": "path5", "current_position": "working"}, "expect": {"status": "confirm"}}
-{"id": "current-field", "key": "current_field", "value": "psych", "answers": {"path_type": "path5", "current_position": "in_college"}, "expect": {"status": "confirm", "set": {"current_field_normalized": "Psychology"}}}
+{"id": "current-role-clear", "key": "current_role", "value": "electrician", "answers": {"path_type": "path4", "include_current_role": "yes"}, "expect": {"status": "confirm", "set": {"current_role_code": "47-2111"}}}
+{"id": "current-role-unknown", "key": "current_role", "value": "stay at home parent", "answers": {"path_type": "path4", "include_current_role": "yes"}, "expect": {"status": "confirm"}}
 {"id": "school-name-abbreviation", "key": "school_name", "value": "UF", "answers": {"path_type": "path3"}, "expect": {"status": "confirm"}}
 {"id": "school-name-full", "key": "school_name", "value": "Georgia Institute of Technology", "answers": {"path_type": "path3"}, "expect": {"status": "confirm", "set": {"school_id": "139755"}}}
 {"id": "school-name-two", "key": "school_name", "value": "UF or FSU", "answers": {"path_type": "path3"}, "expect": {"status": "fix"}}
@@ -46,3 +45,9 @@
 {"id": "pay-monthly", "key": "current_salary", "value": "4,500 a month", "answers": {"path_type": "path4", "include_current_role": "yes", "current_role": "retail store manager", "current_role_code": "41-1011", "current_role_title": "First-Line Supervisors of Retail Sales Workers", "include_salary": "yes"}, "expect": {"status": "confirm", "set": {"current_salary_value": "54000"}}}
 {"id": "pay-hourly-no-hours", "key": "current_salary", "value": "$22 an hour", "answers": {"path_type": "path4", "include_current_role": "yes", "current_role": "retail store manager", "current_role_code": "41-1011", "current_role_title": "First-Line Supervisors of Retail Sales Workers", "include_salary": "yes"}, "expect": {"status": "fix"}}
 {"id": "pay-range", "key": "current_salary", "value": "between 50k and 60k", "answers": {"path_type": "path4", "include_current_role": "yes", "current_role": "retail store manager", "current_role_code": "41-1011", "current_role_title": "First-Line Supervisors of Retail Sales Workers", "include_salary": "yes"}, "expect": {"status": "fix"}}
+{"id": "target-career-fields", "key": "target_career", "value": "software developer", "answers": {"path_type": "path5"}, "expect": {"status": "confirm", "set": {"target_career_code": "15-1252"}, "career_programs": {"fields_include": ["1107", "1409"], "typical_level": 3}}}
+{"id": "target-career-professional", "key": "target_career", "value": "pharmacist", "answers": {"path_type": "path5"}, "expect": {"status": "confirm", "set": {"target_career_code": "29-1051"}, "career_programs": {"fields_include": ["5120"], "typical_level": 7}}}
+{"id": "school-states", "key": "target_location", "value": "Florida and Austin, TX", "answers": {"path_type": "path5"}, "expect": {"status": "confirm", "set": {"target_states": "FL,TX", "target_places": "Florida; Texas"}}}
+{"id": "school-states-none", "key": "target_location", "value": "somewhere warm", "answers": {"path_type": "path5"}, "expect": {"status": "fix"}}
+{"id": "min-pay", "key": "min_pay", "value": "at least 80k", "answers": {"path_type": "path5"}, "expect": {"status": "confirm", "set": {"min_pay_value": "80000"}}}
+{"id": "max-debt-range", "key": "max_debt", "value": "between $20,000 and $40,000", "answers": {"path_type": "path5"}, "expect": {"status": "fix"}}

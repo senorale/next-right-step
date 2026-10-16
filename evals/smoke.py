@@ -20,15 +20,18 @@ from pathlib import Path
 import run  # noqa: F401  loads .env, puts api/ on the import path, collects warnings
 from checks import run_checks
 from run import WARNINGS, agent
+from options import path5_choices
 
 EVALS = Path(__file__).resolve().parent
 
 LABELS = {
     "path2": "Comparing Schools", "path3": "Comparing Programs at a School",
-    "path4": "Compare Career Tracks", "path5": "Path to a Specific Career",
+    "path4": "Compare Career Tracks", "path5": "Best Schools for a Career",
 }
 # CREDENTIAL_LEVELS and RANK_BY_OPTIONS in src/app/chat/page.tsx
-CREDENTIALS = {"3": "Bachelor's degree", "5": "Master's degree", "6": "Doctoral degree", "7": "Professional degree (JD, MD, PharmD)"}
+CREDENTIALS = {"1": "Undergraduate certificate", "2": "Associate's degree", "3": "Bachelor's degree",
+               "4": "Post-baccalaureate certificate", "5": "Master's degree", "6": "Doctoral degree",
+               "7": "Professional degree (JD, MD, PharmD)", "8": "Graduate certificate"}
 RANK_BY = {"debt_to_pay": "Debt compared with pay", "earnings_4yr": "Pay 4 years after graduating",
            "earnings_1yr": "Pay 1 year after graduating", "debt": "Lowest debt"}
 SITUATIONS = {"deciding": "Deciding between programs", "current": "Already in a program, exploring outcomes",
@@ -92,14 +95,16 @@ def chat_message(a: dict) -> str:
     else:
         # path5 in buildPrompt (src/app/chat/page.tsx)
         target = with_soc(a.get("target_career_title") or a["target_career"], a.get("target_career_code"))
-        fields = "; ".join(f"{f['title']} (CIP {f['cip']})" for f in json.loads(a["target_fields"]))
+        fields, _, level = path5_choices(a)
+        where = (a.get("target_places") or a.get("target_location")) if a.get("location_scope") == "states" else "Anywhere in the US"
+        fields_line = "; ".join(f"{f['title']} (CIP {f['cip']})" for f in fields)
         lines += ["- I want to find the schools whose graduates do best in a specific career", f"- Target career: {target}",
-                  f"- Fields of study: {fields}", f"- Degree level: {CREDENTIALS[a['target_level']]}",
-                  f"- Location: {a.get('target_places') or 'Anywhere in the US'}"]
-        if a.get("min_earnings_4yr"):
-            lines.append(f"- Minimum pay 4 years after graduating: ${int(a['min_earnings_4yr']):,}")
-        if a.get("max_debt"):
-            lines.append(f"- Maximum median debt: ${int(a['max_debt']):,}")
+                  f"- Fields of study: {fields_line}", f"- Degree level: {CREDENTIALS.get(str(level), level)}",
+                  f"- Location: {where}"]
+        if a.get("min_pay_value"):
+            lines.append(f"- Minimum pay 4 years after graduating: ${int(a['min_pay_value']):,}")
+        if a.get("max_debt_value"):
+            lines.append(f"- Maximum median debt: ${int(a['max_debt_value']):,}")
         lines += [f"- Rank by: {RANK_BY[a['rank_by']]}", "",
                   "Rank the schools whose graduates in this program do best: pay 1 and 4 years after graduating, and median debt."]
     return "\n".join(lines)

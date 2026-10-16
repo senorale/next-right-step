@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { linkify } from '@/app/components/chat/linkify'
 import ReportFeedback from '@/app/components/chat/ReportFeedback'
-import { EDUCATION_LEVELS, POSITIONS } from '@/app/career-path/gap'
 
 interface IntakeOption {
   value: string
@@ -28,6 +27,8 @@ interface IntakeStep {
   multiSelect?: boolean
   /** Most options a multi-select step accepts. */
   maxSelect?: number
+  /** Single-select: the option selected at first. */
+  defaultValue?: string
   placeholder: string
 }
 
@@ -48,7 +49,7 @@ const PATH_TYPE_STEP: IntakeStep = {
     { value: 'path2', label: "I've decided on college, comparing schools" },
     { value: 'path3', label: "I've decided on a school, comparing programs" },
     { value: 'path4', label: "I want to compare a few different career paths" },
-    { value: 'path5', label: "I have a career in mind and need to know how to get there" },
+    { value: 'path5', label: "I have a career in mind and want the schools whose graduates do best in it" },
   ],
   placeholder: "",
 }
@@ -234,86 +235,165 @@ function getCareersToCompareStep(answers: Record<string, string>): IntakeStep {
   }
 }
 
-// Path 5: Path to a specific career
+// Path 5: Best schools for a career
 const TARGET_CAREER_STEP: IntakeStep = {
   key: 'target_career',
   question: "What career are you interested in?",
-  subtitle: "I'll map out the full path to get there.",
-  placeholder: "e.g. pharmacist, data scientist, electrician...",
+  subtitle: "I'll rank schools by how their graduates in it do: pay and debt.",
+  placeholder: "e.g. pharmacist, software developer, registered nurse...",
 }
 
-const CURRENT_POSITION_STEP: IntakeStep = {
-  key: 'current_position',
-  question: "Where are you now?",
-  subtitle: "This determines how far you need to go.",
-  options: POSITIONS,
-  placeholder: "",
+/** Scorecard credential levels (_CREDENTIAL_LEVELS in api/db.py). */
+const CREDENTIAL_LEVELS: Record<string, string> = {
+  '1': 'Undergraduate certificate',
+  '2': "Associate's degree",
+  '3': "Bachelor's degree",
+  '4': 'Post-baccalaureate certificate',
+  '5': "Master's degree",
+  '6': 'Doctoral degree',
+  '7': 'Professional degree (JD, MD, PharmD)',
+  '8': 'Graduate certificate',
 }
 
-const EDUCATION_LEVEL_STEP: IntakeStep = {
-  key: 'education_level',
-  question: "What's your highest level of education?",
-  subtitle: "I'll credit the school you've already done.",
-  options: EDUCATION_LEVELS.map(({ value, label }) => ({ value, label })),
-  placeholder: "",
+interface CareerField {
+  cip: string
+  title: string
+  /** Schools reporting graduates' earnings, by credential level. */
+  levels: Record<string, number>
 }
 
-const CURRENT_ROLE_STEP: IntakeStep = {
-  key: 'current_role',
-  question: "What do you do?",
-  subtitle: "I'll compare your current role to your target.",
-  placeholder: "e.g. retail manager, medical assistant, IT support...",
-}
-
-function pastSchool(answers: Record<string, string>): boolean {
-  return answers.current_position === 'working' || answers.current_position === 'looking_for_work'
-}
-
-function getCurrentFieldStep(answers: Record<string, string>): IntakeStep | null {
-  if (answers.current_position === 'in_college') {
-    return {
-      key: 'current_field',
-      question: "What are you studying?",
-      subtitle: "I'll factor in your current progress.",
-      placeholder: "e.g. biology, computer science, undeclared...",
-    }
+/** What the target_career check found: the career's fields of study and its typical level. */
+function careerPrograms(answers: Record<string, string>): { fields: CareerField[]; typical: string } {
+  try {
+    const parsed = JSON.parse(answers.career_programs ?? '{}')
+    return { fields: parsed.fields ?? [], typical: String(parsed.typical_level ?? '') }
+  } catch {
+    return { fields: [], typical: '' }
   }
-  if (!pastSchool(answers)) return null
-  const level = answers.education_level
-  if (!EDUCATION_LEVELS.find((l) => l.value === level)?.hasField) return null
+}
+
+// Same rules as path5_choices in api/options.py.
+/** Fields with programs at the career's typical level, else every field. */
+function defaultFields(answers: Record<string, string>): CareerField[] {
+  const { fields, typical } = careerPrograms(answers)
+  const atTypical = fields.filter((f) => typical in f.levels)
+  return atTypical.length > 0 ? atTypical : fields
+}
+
+function chosenFields(answers: Record<string, string>): CareerField[] {
+  const picked = (answers.target_fields ?? '').split('|').filter(Boolean)
+  return picked.length > 0 ? careerPrograms(answers).fields.filter((f) => picked.includes(f.cip)) : defaultFields(answers)
+}
+
+/** Schools reporting earnings at each level, across the chosen fields. */
+function levelCounts(answers: Record<string, string>): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const f of chosenFields(answers)) {
+    for (const [level, n] of Object.entries(f.levels)) counts[level] = (counts[level] ?? 0) + n
+  }
+  return counts
+}
+
+function schoolsLabel(n: number): string {
+  return `${n} ${n === 1 ? 'school' : 'schools'}`
+}
+
+/** Shown only when several fields lead to the career at its typical level. */
+function getFieldStep(answers: Record<string, string>): IntakeStep | null {
+  const fields = defaultFields(answers)
+  if (fields.length < 2) return null
+  const { typical } = careerPrograms(answers)
   return {
-    key: 'current_field',
-    question:
-      level === 'some_college'
-        ? "What did you study?"
-        : level === 'certificate'
-          ? "What's your certificate in?"
-          : "What's your degree in?",
-    subtitle: "I'll see how far along you already are.",
-    placeholder: "e.g. psychology, business, nursing...",
+    key: 'target_fields',
+    question: 'Which fields of study?',
+    subtitle: "Programs in these fields lead to this career. All selected by default. Deselect any you don't want.",
+    options: fields.map((f) => {
+      const n = f.levels[typical] ?? Object.values(f.levels).reduce((a, b) => a + b, 0)
+      return { value: f.cip, label: `${f.title} (${schoolsLabel(n)})` }
+    }),
+    multiSelect: true,
+    placeholder: '',
   }
 }
 
-/** Starting-point questions for path5, in order. */
-function getStartingPointStep(answers: Record<string, string>): IntakeStep | null {
-  const keys = Object.keys(answers)
-  if (!keys.includes('current_position')) return CURRENT_POSITION_STEP
-  if (pastSchool(answers) && !keys.includes('education_level')) return EDUCATION_LEVEL_STEP
-  const fieldStep = getCurrentFieldStep(answers)
-  if (fieldStep && !keys.includes('current_field')) return fieldStep
-  if (answers.current_position !== 'working') return null
-  if (!keys.includes('current_role')) return CURRENT_ROLE_STEP
-  return null
+/** Shown only when the chosen fields have programs at several levels; the career's typical level comes selected. */
+function getLevelStep(answers: Record<string, string>): IntakeStep | null {
+  const counts = levelCounts(answers)
+  const levels = Object.keys(counts).sort((a, b) => Number(a) - Number(b))
+  if (levels.length < 2) return null
+  const { typical } = careerPrograms(answers)
+  const most = levels.reduce((a, b) => (counts[b] > counts[a] ? b : a))
+  return {
+    key: 'target_level',
+    question: 'Which degree?',
+    subtitle: "Schools are ranked on this degree's graduates.",
+    options: levels.map((l) => ({ value: l, label: `${CREDENTIAL_LEVELS[l] ?? `Level ${l}`} (${schoolsLabel(counts[l])})` })),
+    defaultValue: typical in counts ? typical : most,
+    placeholder: '',
+  }
 }
 
-function countStartingPointSteps(answers: Record<string, string>): number {
-  const pos = answers.current_position
-  if (!pos) return 3
-  if (pos === 'in_college') return 2
-  if (pos !== 'working' && pos !== 'looking_for_work') return 1
-  const level = answers.education_level
-  const hasField = !level || !!EDUCATION_LEVELS.find((l) => l.value === level)?.hasField
-  return 2 + (hasField ? 1 : 0) + (pos === 'working' ? 1 : 0)
+const LOCATION_SCOPE_STEP: IntakeStep = {
+  key: 'location_scope',
+  question: 'Where do you want to study?',
+  subtitle: "I'll rank schools across the country or in the states you name.",
+  options: [
+    { value: 'national', label: 'Anywhere in the US' },
+    { value: 'states', label: 'Specific states' },
+  ],
+  placeholder: '',
+}
+
+const SCHOOL_STATES_STEP: IntakeStep = {
+  key: 'target_location',
+  question: 'Which states?',
+  subtitle: 'Name one or more.',
+  placeholder: 'e.g. Florida, Texas...',
+}
+
+const REQUIREMENTS_STEP: IntakeStep = {
+  key: 'requirements',
+  question: 'Any limits on the schools?',
+  subtitle: 'Leave out schools whose graduates earn too little or owe too much.',
+  options: [
+    { value: 'none', label: 'No limits' },
+    { value: 'min_pay', label: 'A minimum pay' },
+    { value: 'max_debt', label: 'A maximum debt' },
+    { value: 'both', label: 'Both' },
+  ],
+  defaultValue: 'none',
+  placeholder: '',
+}
+
+const MIN_PAY_STEP: IntakeStep = {
+  key: 'min_pay',
+  question: 'Lowest pay you want?',
+  subtitle: "Graduates' median pay 4 years after graduating.",
+  placeholder: 'e.g. $80,000',
+}
+
+const MAX_DEBT_STEP: IntakeStep = {
+  key: 'max_debt',
+  question: 'Most debt you want?',
+  subtitle: "Graduates' median federal student loan debt.",
+  placeholder: 'e.g. $50,000',
+}
+
+/** path5 rank_by (PROGRAM_RANK in api/db.py). */
+const RANK_BY_OPTIONS: IntakeOption[] = [
+  { value: 'debt_to_pay', label: 'Debt compared with pay' },
+  { value: 'earnings_4yr', label: 'Pay 4 years after graduating' },
+  { value: 'earnings_1yr', label: 'Pay 1 year after graduating' },
+  { value: 'debt', label: 'Lowest debt' },
+]
+
+const PATH5_RANK_BY_STEP: IntakeStep = {
+  key: 'rank_by',
+  question: 'Rank schools by?',
+  subtitle: 'Debt compared with pay favors schools whose graduates owe little for what they earn.',
+  options: RANK_BY_OPTIONS,
+  defaultValue: 'debt_to_pay',
+  placeholder: '',
 }
 
 function getRankByStep(answers: Record<string, string>): IntakeStep {
@@ -437,7 +517,18 @@ function getNextStep(answers: Record<string, string>): IntakeStep | null {
 
   if (path === 'path5') {
     if (!keys.includes('target_career')) return TARGET_CAREER_STEP
-    return getStartingPointStep(answers)
+    const fieldStep = getFieldStep(answers)
+    if (fieldStep && !keys.includes('target_fields')) return fieldStep
+    const levelStep = getLevelStep(answers)
+    if (levelStep && !keys.includes('target_level')) return levelStep
+    if (!keys.includes('location_scope')) return LOCATION_SCOPE_STEP
+    if (answers.location_scope === 'states' && !keys.includes('target_location')) return SCHOOL_STATES_STEP
+    if (!keys.includes('requirements')) return REQUIREMENTS_STEP
+    const limits = answers.requirements
+    if ((limits === 'min_pay' || limits === 'both') && !keys.includes('min_pay')) return MIN_PAY_STEP
+    if ((limits === 'max_debt' || limits === 'both') && !keys.includes('max_debt')) return MAX_DEBT_STEP
+    if (!keys.includes('rank_by')) return PATH5_RANK_BY_STEP
+    return null
   }
 
   return null
@@ -461,7 +552,9 @@ function estimateTotalSteps(answers: Record<string, string>): number {
     return answers.include_salary === 'yes' ? 7 : 5
   }
   if (path === 'path5') {
-    return 2 + countStartingPointSteps(answers)
+    const limits = answers.requirements
+    return 5 + (getFieldStep(answers) ? 1 : 0) + (getLevelStep(answers) ? 1 : 0)
+      + (answers.location_scope === 'states' ? 1 : 0) + (limits === 'both' ? 2 : limits && limits !== 'none' ? 1 : 0)
   }
   return 5
 }
@@ -542,10 +635,11 @@ const DERIVED_KEYS: Record<string, string[]> = {
   school_name: ['school_id', 'school_matched_name'],
   programs: ['program_list'],
   careers_to_compare: ['career_matches'],
-  target_career: ['target_career_code', 'target_career_title'],
-  current_field: ['current_field_normalized'],
+  target_career: ['target_career_code', 'target_career_title', 'career_programs'],
   current_role: ['current_role_code', 'current_role_title'],
   current_salary: ['current_salary_value'],
+  min_pay: ['min_pay_value'],
+  max_debt: ['max_debt_value'],
 }
 const HIDDEN_KEYS = new Set(Object.values(DERIVED_KEYS).flat())
 
@@ -560,8 +654,9 @@ const CHECKING_MESSAGES: Record<string, string> = {
   programs: 'Checking programs at your school…',
   target_location: 'Finding those places…',
   specific_numbers: 'Reading your numbers…',
-  current_field: 'Reading your field of study…',
   current_salary: 'Reading your pay…',
+  min_pay: 'Reading that amount…',
+  max_debt: 'Reading that amount…',
 }
 
 function CheckingStatus({ stepKey }: { stepKey: string }) {
@@ -629,7 +724,7 @@ function IntakeFlow({ onComplete }: { onComplete: (answers: Record<string, strin
       setSelections(saved ? saved.split('|') : initial.map(optionValue))
       setSelected('')
     } else {
-      setSelected(saved)
+      setSelected(saved || (current.defaultValue ?? ''))
       setSelections([])
     }
     setInput(saved)
@@ -1242,7 +1337,7 @@ const PATH_LABELS: Record<string, string> = {
   path2: 'Comparing Schools',
   path3: 'Comparing Programs at a School',
   path4: 'Compare Career Tracks',
-  path5: 'Path to a Specific Career',
+  path5: 'Best Schools for a Career',
 }
 
 const METRIC_TO_SORT: Record<string, string> = {
@@ -1253,17 +1348,6 @@ const METRIC_TO_SORT: Record<string, string> = {
   'Admission rate': 'admission_rate',
   'Retention rate': 'retention_rate',
   'Loan repayment rate': 'loan_repayment',
-}
-
-function startingPointLines(answers: Record<string, string>): string[] {
-  const lines: string[] = []
-  const position = POSITIONS.find((p) => p.value === answers.current_position)
-  if (position) lines.push(`- Current position: ${position.label}`)
-  const level = EDUCATION_LEVELS.find((l) => l.value === answers.education_level)
-  if (level) lines.push(`- Highest education: ${level.label}`)
-  if (answers.current_field) lines.push(`- Field of study: ${answers.current_field_normalized ?? answers.current_field}`)
-  if (answers.current_role) lines.push(`- Current job: ${currentJob(answers)}`)
-  return lines
 }
 
 function currentJob(answers: Record<string, string>): string {
@@ -1370,11 +1454,17 @@ function buildPrompt(answers: Record<string, string>): string {
   }
 
   if (path === 'path5') {
-    lines.push(`- I have a specific career in mind`)
-    if (answers.target_career) lines.push(`- Target career: ${withSoc(answers.target_career_title ?? answers.target_career, answers.target_career_code)}`)
-    lines.push(...startingPointLines(answers))
+    lines.push('- I want to find the schools whose graduates do best in a specific career')
+    lines.push(`- Target career: ${withSoc(answers.target_career_title ?? answers.target_career, answers.target_career_code)}`)
+    lines.push(`- Fields of study: ${chosenFields(answers).map((f) => `${f.title} (CIP ${f.cip})`).join('; ')}`)
+    const level = answers.target_level ?? getLevelStep(answers)?.defaultValue ?? Object.keys(levelCounts(answers))[0]
+    lines.push(`- Degree level: ${CREDENTIAL_LEVELS[level] ?? level}`)
+    lines.push(`- Location: ${answers.location_scope === 'states' ? answers.target_places ?? answers.target_location : 'Anywhere in the US'}`)
+    if (answers.min_pay_value) lines.push(`- Minimum pay 4 years after graduating: $${Number(answers.min_pay_value).toLocaleString('en-US')}`)
+    if (answers.max_debt_value) lines.push(`- Maximum median debt: $${Number(answers.max_debt_value).toLocaleString('en-US')}`)
+    lines.push(`- Rank by: ${RANK_BY_OPTIONS.find((o) => o.value === answers.rank_by)?.label ?? answers.rank_by}`)
     lines.push('')
-    lines.push('Map out the full path from where I am to the target career. Steps, timeline, education, cost, expected salary, time to recoup. Show gap analysis if I have relevant education.')
+    lines.push('Rank the schools whose graduates in this program do best: pay 1 and 4 years after graduating, and median debt.')
   }
 
   return lines.join('\n')

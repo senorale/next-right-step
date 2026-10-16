@@ -57,6 +57,14 @@ def check(result: dict, expect: dict) -> list[str]:
         programs = json.loads(stored_set.get("program_list") or "null")
         if programs != expect["program_list"]:
             problems.append(f"program_list {programs}, expected {expect['program_list']}")
+    if "career_programs" in expect:
+        # path5: the career's fields of study and its typical degree level, for the field and level steps.
+        found = json.loads(stored_set.get("career_programs") or "{}")
+        want = expect["career_programs"]
+        cips = {f["cip"] for f in found.get("fields") or []}
+        problems += [f"career_programs lacks field {c}" for c in want.get("fields_include", []) if c not in cips]
+        if "typical_level" in want and found.get("typical_level") != want["typical_level"]:
+            problems.append(f"typical_level {found.get('typical_level')}, expected {want['typical_level']}")
     labels = [c.get("label", "").lower() for c in choices]
     problems += [f"no choice {want!r}" for want in expect.get("choices_include", []) if want.lower() not in labels]
     # Occupation choices store the code under the step's key (occupation_code, target_career_code, ...).
