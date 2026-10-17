@@ -34,6 +34,7 @@ from options import (RANK_SORT, allowed_metrics, candidate_rows, check_rows, pai
                      path3_gaps, path5_gaps, path5_options, rank_choice, report_rows, with_rows)
 from user_numbers import extract_user_numbers
 from report import REPORT_PROMPT, render_report, report_schema
+from report_checks import number_problems, report_facts, sentence_ok, split_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -424,28 +425,24 @@ async def generate_report_stream(
         yield event
 
 
-async def write_report(content: dict, agent_text: str):
-    """Report generation alone: writes and renders the report from a prepared
-    input (prepare_report_input). evals/report_eval.py calls this with fixed inputs."""
-    user_content = json.dumps(content, default=_json_default)
-
-    yield _progress("Writing your report…", "writing", GATHERING_END)
+async def _report_call(content: dict, show_progress: bool):
+    """One report model call. Yields progress events while it streams (when
+    show_progress), then {"event": "text", "text": ...}."""
     t0 = time.perf_counter()
     chars = 0
     last_percent = GATHERING_END
     parts: list[str] = []
     usage, finish_reason = None, None
-    rows = content["rows"]
     stream = await client.chat.completions.create(
         model=REPORT_MODEL,
         max_tokens=REPORT_SPEC_MAX_TOKENS,
         messages=[
             {"role": "system", "content": REPORT_PROMPT},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": json.dumps(content, default=_json_default)},
         ],
         # Numbers come from code, so variety only adds risk (e.g. garbled figures).
         temperature=0,
-        response_format={"type": "json_schema", "json_schema": {"name": "report", "schema": report_schema(rows, content.get("intake_answers"))}},
+        response_format={"type": "json_schema", "json_schema": {"name": "report", "schema": report_schema(content["rows"], content.get("intake_answers"))}},
         stream=True,
         stream_options={"include_usage": True},
     )
@@ -461,7 +458,7 @@ async def write_report(content: dict, agent_text: str):
         # ~4 chars per token is close enough for a progress estimate.
         fraction = min(1.0, (chars / 4) / REPORT_EXPECTED_TOKENS)
         percent = GATHERING_END + (WRITING_END - GATHERING_END) * fraction
-        if percent - last_percent >= 3:
+        if show_progress and percent - last_percent >= 3:
             last_percent = percent
             yield _progress("Writing your report…", "writing", percent)
     elapsed = time.perf_counter() - t0
@@ -471,21 +468,83 @@ async def write_report(content: dict, agent_text: str):
         elapsed, usage.prompt_tokens if usage else 0, out_tokens,
         out_tokens / elapsed if elapsed else 0, finish_reason,
     )
-
     text = "".join(parts)
     logger.info("Report response size: %d bytes, finish_reason=%s", len(text), finish_reason)
+    yield {"event": "text", "text": text}
+
+
+def _checked(spec: dict, content: dict, agent_text: str) -> tuple[dict, dict[str, list[str]]]:
+    """Renders a report spec and runs the number checks (report_checks.py) on
+    it. Returns ({"summary", "html"}, problems)."""
+    # The headline doubles as the chat reply.
+    reply = spec.get("headline") or agent_text
+    report_html = render_report(spec, content["rows"], content.get("intake_answers"), content.get("career"))
+    return {"summary": reply, "html": report_html}, number_problems(reply, report_html)
+
+
+def _supported_only(spec: dict, report_html: str) -> dict:
+    """The spec without the sentences whose figures the checks reject. The
+    tables and charts the checks compare with are code's, so dropping text
+    doesn't change them. A headline left empty takes the first remaining bullet."""
+    facts = report_facts(report_html)
+
+    def keep(text) -> str:
+        return " ".join(s for s in split_sentences(text if isinstance(text, str) else "") if sentence_ok(s, facts))
+
+    sections = [
+        {**sec, "bullets": [b for b in (keep(b) for b in sec.get("bullets") or []) if b],
+         "what_it_means": keep(sec.get("what_it_means"))}
+        for sec in spec.get("sections") or [] if isinstance(sec, dict)
+    ]
+    headline = keep(spec.get("headline")) or next((b for sec in sections for b in sec["bullets"]), "")
+    return {**spec, "headline": headline, "sections": sections,
+            "limitations": [x for x in (keep(x) for x in spec.get("limitations") or []) if x]}
+
+
+async def write_report(content: dict, agent_text: str, check_numbers: bool = True):
+    """Report generation alone: writes and renders the report from a prepared
+    input (prepare_report_input). evals/report_eval.py calls this with fixed
+    inputs and check_numbers=False, to score the model's own text.
+
+    With check_numbers, a report whose text has a figure the data doesn't
+    support (report_checks.py) is written once more; if the second one fails
+    too, the failing sentences are dropped from the one with fewer problems."""
+    yield _progress("Writing your report…", "writing", GATHERING_END)
+    text = ""
+    async for event in _report_call(content, show_progress=True):
+        if event["event"] == "text":
+            text = event["text"]
+        else:
+            yield event
     parsed = _parse_json_response(text)
     if parsed is None:
         yield {"event": "report", "report": {"summary": agent_text, "html": ""}}
         return
 
     yield _progress("Finalizing your report…", "rendering", RENDERING_PERCENT)
-    # The headline doubles as the chat reply.
-    reply = parsed.get("headline") or agent_text
-    parsed = {"summary": reply, "html": render_report(parsed, rows, content.get("intake_answers"), content.get("career"))}
+    report, problems = _checked(parsed, content, agent_text)
+    if check_numbers and any(problems.values()):
+        logger.warning("Report failed number checks, writing it again: %s", problems)
+        yield _progress("Double-checking the figures…", "rendering", RENDERING_PERCENT)
+        attempts = [(parsed, report, problems)]
+        retried = None
+        try:
+            async for event in _report_call(content, show_progress=False):
+                retried = _parse_json_response(event["text"])
+            if retried is not None:
+                attempts.append((retried, *_checked(retried, content, agent_text)))
+        except Exception:
+            logger.exception("Report retry after failed number checks raised")
+        spec, report, problems = min(attempts, key=lambda a: sum(len(p) for p in a[2].values()))
+        if any(problems.values()):
+            send_alert("Report failed number checks twice; dropped sentences", {
+                "problems": problems, "intake_answers": content.get("intake_answers")})
+            report, problems = _checked(_supported_only(spec, report["html"]), content, agent_text)
+            if any(problems.values()):
+                logger.error("Report still fails number checks after dropping sentences: %s", problems)
 
-    logger.info("Report parsed OK: summary=%d chars, html=%d chars", len(parsed.get("summary", "")), len(parsed.get("html", "")))
-    yield {"event": "report", "report": parsed}
+    logger.info("Report parsed OK: summary=%d chars, html=%d chars", len(report["summary"]), len(report["html"]))
+    yield {"event": "report", "report": report}
 
 
 async def generate_report(

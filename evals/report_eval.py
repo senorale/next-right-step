@@ -32,7 +32,7 @@ async def run_case(case: dict) -> dict:
     WARNINGS.lines = []
     start = time.perf_counter()
     report = {}
-    async for event in agent.write_report(content, ""):
+    async for event in agent.write_report(content, "", check_numbers=False):
         if event.get("event") == "report":
             report = event["report"]
     summary, html = report.get("summary", ""), report.get("html", "")
