@@ -35,35 +35,32 @@ DISCLAIMER = (
     "AI analysis may contain errors; verify figures before making decisions. Generated {today}."
 )
 
-REPORT_PROMPT = """You write the text of a college and career report. Input: the user's intake answers (path_type says their question), option rows built by code, and the gaps between every pair of rows. Code renders the charts, the financial table with payoff timelines, and source notes; you pick the rows and write the words.
+REPORT_PROMPT = """You write the text of a college and career report. Input: the user's intake answers (path_type says their question), option rows built by code, and the gaps between every pair of rows. Code picked the rows, and the report shows every one, with charts, the financial table with payoff timelines, and source notes; you write the words.
 
-- option_ids: the rows that answer their question, in display order.
 - headline: the main takeaway in 1-2 sentences; it is also the chat reply. Never describe the report.
 - sections: 2-3, most important first. The reader already sees every row in the table, so each bullet compares two or more options ("Lawyers earn $68,124 more in median salary than bachelor's holders"); never one bullet per option restating its numbers. what_it_means: one concrete takeaway. table_metrics: row metrics worth a table here; only the ones the user chose, if they chose any.
 - limitations: 1-2 caveats specific to this comparison.
 
 Numbers:
-- Use only numbers from the rows and gaps, copied exactly; never compute one. Each gap names the option with the higher salary, debt, or years. Write dollars as $61,690.
+- Use only numbers from the rows, gaps, and (path5) career and median_gaps, copied exactly; never compute one. Each gap names the option with the higher salary, debt, or years. Write dollars as $61,690.
 - Write for the user: never say "row", "gap", or field names. National figures are medians: say "median salary", "median debt". Rows marked user_numbers hold the user's own figures: say "your".
 - Occupation salaries are BLS medians for the whole occupation; school and program salaries are College Scorecard earnings of its graduates.
 - Years of school are typical: say "typically".
 
 Per path:
-- path1: college vs a trade vs working now. Show every row compare_education_paths returned. The headline states figures: with a user_numbers row, the user's salary and debt against the national median; otherwise whether the chosen occupation needs graduate school, its total years of school, median salary, and median debt, and, if it does, its years beyond a bachelor's and its salary and debt gaps against the bachelor's row.
-- path2: show only the schools they named (not other campuses a search returned), or for a location the schools found. Code orders them by rank_by and limits table_metrics to what they chose.
-- path3: show the programs compare_programs returned and the occupations in each program's leads_to; code orders the programs by program_priority. Compare each program's graduates' earnings with the national median salary of the occupations it leads to, and the programs with each other.
-- path4: show every row compare_careers returned. Compare the careers with each other on median salary, typical years of school, and median debt; there is no payoff, so never mention one. The row named "Your current job" is the user's job: compare each career with it and call it "your current job", not by its occupation title. Its salary is the national median unless the row is marked user_numbers (their own pay: say "your pay").
-- path5: schools ranked for one career on its program. Code ranked the rows by the user's rank_by: put every row in option_ids in the order given. Compare the top schools with each other and with the program's national median (career.national_spread), and say how much the school matters: how far the lowest and highest schools nationally sit from the median. Pay 1 year after graduating is not starting salary (some programs enroll people already working in the field): never call it starting salary. table_metrics: leave empty; code shows every figure in its own table. Code also states the data caveats (federal loans only, whole-institution figures, programs too small to report), so limitations name other ones.
+- path1: college vs a trade vs working now. The headline states figures: with a user_numbers row, the user's salary and debt against the national median; otherwise whether the chosen occupation needs graduate school, its total years of school, median salary, and median debt, and, if it does, its years beyond a bachelor's and its salary and debt gaps against the bachelor's row.
+- path2: the schools they picked, or for a location the schools found, and the national bachelor's median for reference. Code orders the schools by rank_by and limits table_metrics to what they chose.
+- path3: the programs they confirmed and the occupations in each program's leads_to; code orders the programs by program_priority. Compare each program's graduates' earnings with the national median salary of the occupations it leads to, and the programs with each other.
+- path4: the careers they confirmed, and their current job if included. Compare the careers with each other on median salary, typical years of school, and median debt; there is no payoff, so never mention one. The row named "Your current job" is the user's job: compare each career with it and call it "your current job", not by its occupation title. Its salary is the national median unless the row is marked user_numbers (their own pay: say "your pay").
+- path5: schools ranked for one career on its program. Code ranked the rows by the user's rank_by. Compare the top 3 schools with each other and with the program's national median (career.national_spread), and say how much the school matters: how far the lowest and highest schools nationally sit from the median. gaps cover only pairs with a top 3 school; median_gaps give each top 3 school's gap from the national median and the lowest and highest schools' gaps from it. Pay 1 year after graduating is not starting salary (some programs enroll people already working in the field): never call it starting salary. table_metrics: leave empty; code shows every figure in its own table. Code also states the data caveats (federal loans only, whole-institution figures, programs too small to report), so limitations name other ones.
 """
 
 _TEXT = {"type": "string"}
 
 
 def report_schema(rows: list[dict], intake_answers: dict | None = None) -> dict:
-    """The shape the report model must return; the API enforces it. option ids
-    are limited to the rows the model was given, metric keys to those rows'
-    metrics the user chose (options.allowed_metrics)."""
-    ids = {"type": "string", "enum": [r["option_id"] for r in rows]}
+    """The shape the report model must return; the API enforces it. Metric
+    keys are limited to the rows' metrics the user chose (options.allowed_metrics)."""
     allowed = allowed_metrics(intake_answers)
     metrics = sorted({k for r in rows for k in (r.get("metrics") or {})
                       if k in METRIC_FORMATS and (allowed is None or k in allowed)})
@@ -72,7 +69,6 @@ def report_schema(rows: list[dict], intake_answers: dict | None = None) -> dict:
         "type": "object",
         "properties": {
             "headline": _TEXT,
-            "option_ids": {"type": "array", "items": ids},
             "sections": {"type": "array", "items": {
                 "type": "object",
                 "properties": {
@@ -86,7 +82,7 @@ def report_schema(rows: list[dict], intake_answers: dict | None = None) -> dict:
             }},
             "limitations": {"type": "array", "items": _TEXT},
         },
-        "required": ["headline", "option_ids", "sections", "limitations"],
+        "required": ["headline", "sections", "limitations"],
         "additionalProperties": False,
     }
 
@@ -553,15 +549,14 @@ SAVE_BUTTON = (
 
 
 def render_report(spec: dict, rows: list[dict], intake_answers: dict | None = None, career: dict | None = None) -> str:
-    """rows: every option row the model could pick (options.candidate_rows).
-    The report shows the ones it picked with their own numbers, in the user's
-    rank_by order when they chose one, else the model's; metric tables keep to
-    the metrics the user chose. path5 shows every ranked school in code's
-    order, with career (the tool's occupation and national spread)."""
+    """rows: the rows code picked for the report (options.report_rows). The
+    report shows every one with its own numbers, in the user's rank_by order
+    when they chose one; metric tables keep to the metrics the user chose.
+    path5 shows every ranked school in code's order, with career (the tool's
+    occupation and national spread)."""
     path = (intake_answers or {}).get("path_type")
     by_id = {r["option_id"]: r for r in rows}
-    options = [by_id[i] for i in dict.fromkeys(spec.get("option_ids") or []) if i in by_id]
-    options = rank_rows(options, intake_answers)
+    options = rank_rows(list(rows), intake_answers)
     allowed = allowed_metrics(intake_answers)
     if allowed is not None:
         # Backstop for a model that ignores the schema's enum.

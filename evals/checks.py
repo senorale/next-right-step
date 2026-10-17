@@ -114,16 +114,47 @@ def _aliases(name: str) -> list[str]:
     return [words[-1].rstrip("s")]
 
 
-def _wrong_gaps(sentence: str, rows: dict[str, dict]) -> list[str]:
+def _names(text: str, name: str) -> bool:
+    """Whether text names the row, by whole words: "mathematic" (Mathematics)
+    isn't named by "Mathematical Science Occupations"."""
+    return any(re.search(rf"\b{re.escape(a)}s?\b", text) for a in _aliases(name))
+
+
+def _national_gaps(report_html: str) -> list[float]:
+    """path5's national spread table (lowest, median, highest school per
+    measure): each median, and how far the lowest and highest sit from it."""
+    if "<h2>How much the school matters</h2>" not in report_html:
+        return []
+    table = report_html.split("<h2>How much the school matters</h2>", 1)[1].split("</table>", 1)[0]
+    out = []
+    for row in re.findall(r"<tr>(.*?)</tr>", table, flags=re.S):
+        cells = [_numbers(_text(c).replace("$", "")) for c in re.findall(r"<td>(.*?)</td>", row, flags=re.S)]
+        if len(cells) >= 4 and all(cells[1:4]):
+            low, median, high = cells[1][0], cells[2][0], cells[3][0]
+            out.append((median, median - low, high - median))
+    return out
+
+
+def _wrong_gaps(sentence: str, rows: dict[str, dict], national: list | None = None) -> list[str]:
     """For "$X more ... than <row>": X must be the gap between the row named after
-    "than" and another row the sentence names before it."""
+    "than" and another row the sentence names before it. "than the national
+    median" may also mean path5's national spread: a row's gap from a national
+    median, or the lowest or highest school's."""
     problems = []
     for match in GAP_PHRASE.finditer(sentence):
         amount, after = match.group(1), match.group(3)
+        # The compared row ends at the clause: "than the national median, and Duquesne ..."
+        # (row names can hold commas and "and": "Computer and Information Sciences, General").
+        after = re.split(r";|,\s*(?:and|but)\b", after)[0]
         value = float(amount.replace(",", ""))
         before = sentence[: match.start(3)].lower()
-        compared = [n for n in rows if any(a in after.lower() for a in _aliases(n))]
-        subjects = [n for n in rows if any(a in before for a in _aliases(n)) and n not in compared]
+        compared = [n for n in rows if _names(after.lower(), n)]
+        subjects = [n for n in rows if _names(before, n) and n not in compared]
+        if "national median" in after.lower() and national:
+            gaps = [abs(v - median) for s in subjects for v in rows[s].values() for median, _, _ in national]
+            gaps += [g for _, below, above in national for g in (below, above)]
+            if any(_same(value, g) for g in gaps):
+                continue
         if not compared or not subjects:
             continue
         gaps = [
@@ -156,7 +187,7 @@ def run_checks(response: str, report_html: str, expect: dict | None = None) -> d
             s for s in sentences
             if any(not any(_same(v, f) for f in figures + gaps) for v in _dollars(s))
         ],
-        "gaps_match_rows": [p for s in sentences for p in _wrong_gaps(s, rows)],
+        "gaps_match_rows": [p for s in sentences for p in _wrong_gaps(s, rows, _national_gaps(report_html))],
     }
     if expect and expect.get("required_figures"):
         found = _numbers(" ".join(texts))

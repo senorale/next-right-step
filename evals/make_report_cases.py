@@ -18,12 +18,12 @@ import options
 EVALS = Path(__file__).resolve().parent
 
 PATH1 = {"path_type": "path1", "data_source": "medians"}
-def path2(case_id: str, intake: dict, calls: list[dict], expect: dict) -> dict:
-    """A path2 case: the search_schools calls a correct agent makes, plus
-    expectations; allowed_metrics come from the user's compare_metrics."""
+def path2(case_id: str, intake: dict, expect: dict) -> dict:
+    """A path2 case: the calls code makes from intake (agent._planned_calls),
+    plus expectations; allowed_metrics come from the user's compare_metrics."""
     intake = {"path_type": "path2", **intake}
     allowed = options.allowed_metrics(intake)
-    return {"id": case_id, "intake": intake, "calls": [("search_schools", c) for c in calls],
+    return {"id": case_id, "intake": intake, "calls": agent._planned_calls(intake),
             "expect": {"allowed_metrics": allowed, **expect}}
 
 
@@ -92,21 +92,20 @@ CASES = [
     # ranked_by: [row field or metric, "asc" | "desc"] the shown schools must follow.
     path2("path2-named-schools",
           {"has_specific_schools": "yes", "target_schools": "University of Florida, Georgia Tech, NYU",
-           "compare_metrics": "Earnings after graduation|Net price / cost|Graduation rate", "rank_by": "Earnings after graduation"},
-          [{"name": "University of Florida", "sort_by": "earnings"}, {"name": "Georgia Institute of Technology", "sort_by": "earnings"},
-           {"name": "New York University", "sort_by": "earnings"}],
+           "compare_metrics": "Earnings after graduation|Net price / cost|Graduation rate", "rank_by": "Earnings after graduation",
+           "school_picks": "134130|139755|193900"},
           {"required_options": ["school:134130", "school:139755", "school:193900"], "forbidden_options": ["school:484473"],
-           "ranked_by": ["expected_salary", "desc"], "required_figures": [102772]}),
+           "ranked_by": ["expected_salary", "desc"], "required_figures": [114210]}),
     path2("path2-abbreviations",
           {"has_specific_schools": "yes", "target_schools": "UF and FSU",
-           "compare_metrics": "Net price / cost|Debt at graduation", "rank_by": "Net price / cost"},
-          [{"name": "University of Florida", "sort_by": "net_price"}, {"name": "Florida State University", "sort_by": "net_price"}],
+           "compare_metrics": "Net price / cost|Debt at graduation", "rank_by": "Net price / cost",
+           "school_picks": "134130|134097"},
           {"required_options": ["school:134130", "school:134097"], "forbidden_options": ["school:484473"],
            "ranked_by": ["avg_net_price", "asc"]}),
     path2("path2-by-state",
           {"has_specific_schools": "no", "target_location": "Colorado",
-           "compare_metrics": "Net price / cost|Graduation rate", "rank_by": "Net price / cost"},
-          [{"state": "CO", "sort_by": "net_price"}],
+           "compare_metrics": "Net price / cost|Graduation rate", "rank_by": "Net price / cost",
+           "target_places": "Colorado", "target_states": "CO"},
           {"min_options": ["school:", 3], "ranked_by": ["avg_net_price", "asc"]}),
     path3("path3-cs-nursing",
           {**UF, "school_situation": "deciding", "programs": "computer science, nursing",

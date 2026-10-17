@@ -24,12 +24,14 @@ load_dotenv(dotenv_path="../.env")
 import openai
 from alerts import send_alert
 from db import (
+    schools_by_ids,
     search_schools,
     get_school_programs,
     search_occupations,
 )
 from career_cost import CASHIER_CODE, ELECTRICIAN_CODE, path1_options
-from options import allowed_metrics, candidate_rows, check_rows, pairwise_gaps, path3_options, path4_options, path5_options, with_rows
+from options import (RANK_SORT, allowed_metrics, candidate_rows, check_rows, pairwise_gaps, path3_options, path4_options,
+                     path3_gaps, path5_gaps, path5_options, rank_choice, report_rows, with_rows)
 from user_numbers import extract_user_numbers
 from report import REPORT_PROMPT, render_report, report_schema
 
@@ -224,6 +226,17 @@ TOOLS = [
         },
     },
     {
+        "name": "get_schools",
+        "description": "Get schools by their College Scorecard IDs, with the same figures as search_schools. Use it for schools the user confirmed in intake (school_picks).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "school_ids": {"type": "array", "items": {"type": "integer"}, "description": "College Scorecard IDs"},
+            },
+            "required": ["school_ids"],
+        },
+    },
+    {
         "name": "compare_careers",
         "description": "Compare the careers the user confirmed in intake, plus their current job if they included it. Returns a row per career with years of school, median student debt, and BLS median salary. All figures are computed; use them as given. Takes no arguments: the careers come from intake.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
@@ -244,6 +257,7 @@ OPENAI_TOOLS = [
 _TOOL_PROGRESS = {
     "search_occupations": "Searching occupations…",
     "search_schools": "Looking up schools…",
+    "get_schools": "Looking up schools…",
     "get_school_programs": "Pulling program earnings…",
     "compare_education_paths": "Comparing education paths…",
     "compare_programs": "Comparing programs…",
@@ -259,6 +273,7 @@ TOOL_DISPATCH = {
         args.get("degree_type", "bachelor"),
     ),
     "get_school_programs": lambda args: get_school_programs(args["school_id"], args.get("program_search")),
+    "get_schools": lambda args: schools_by_ids(args["school_ids"]),
 }
 
 
@@ -350,22 +365,27 @@ def _progress(message: str, stage: str, percent: float, **extra) -> dict:
 
 
 def build_report_input(intake_answers: dict, data_blocks: list[dict]) -> tuple[dict, list[dict]]:
-    """Everything the report model receives: the intake answers, every option
-    row gathered, and the gaps between them. Raw tool results stay out, so the
+    """Everything the report model receives: the intake answers, the option
+    rows the report shows (options.report_rows), and the gaps between them. Raw tool results stay out, so the
     only numbers the model sees are the ones code renders."""
-    rows = candidate_rows(intake_answers, data_blocks)
+    rows = report_rows(intake_answers, candidate_rows(intake_answers, data_blocks))
     allowed = allowed_metrics(intake_answers)
     if allowed is not None:
         # Only the metrics the user chose reach the model, so its text can't
         # cite one the report doesn't show.
         rows = [{**r, "metrics": {k: v for k, v in r["metrics"].items() if k in allowed}} if "metrics" in r else r
                 for r in rows]
-    content = {"intake_answers": intake_answers, "rows": rows, "gaps": pairwise_gaps(rows)}
+    content = {"intake_answers": intake_answers, "rows": rows}
     ranked = next((b["data"] for b in data_blocks if b.get("type") == "rank_schools_for_career"
                    and isinstance(b.get("data"), dict) and "options" in b["data"]), None)
     if ranked:
         # path5: the career and the program's national spread, which the report compares the schools with.
         content["career"] = {k: ranked[k] for k in ("occupation", "rank_by", "national_spread")}
+        content["gaps"], content["median_gaps"] = path5_gaps(rows, ranked.get("national_spread") or {})
+    elif intake_answers.get("path_type") == "path3":
+        content["gaps"] = path3_gaps(rows)
+    else:
+        content["gaps"] = pairwise_gaps(rows)
     return content, rows
 
 
@@ -481,21 +501,43 @@ async def generate_report(
     return report
 
 
+# Chat reply for a run gathered in code, until the report's headline replaces it.
+PLANNED_REPLY = "Here's what I found."
+
+
+def _planned_calls(intake_answers: dict | None) -> list[tuple[str, dict]] | None:
+    """The first turn's tool calls when intake already confirmed everything
+    they take, else None (the model gathers). path1: the confirmed occupation;
+    path2: the schools picked, or a search per state ranked by the user's
+    choice; path3-5: the one tool that reads intake."""
+    answers = intake_answers or {}
+    path = answers.get("path_type")
+    if path == "path1" and answers.get("occupation_code"):
+        return [("compare_education_paths", {"occupation_code": answers["occupation_code"]})]
+    if path == "path2":
+        picks = [int(p) for p in (answers.get("school_picks") or "").split("|") if p.isdigit()]
+        if picks:
+            return [("get_schools", {"school_ids": picks})]
+        states = [s.strip() for s in (answers.get("target_states") or "").split(",") if s.strip()]
+        sort = RANK_SORT.get(rank_choice(answers))
+        return [("search_schools", {"state": s, **({"sort_by": sort} if sort else {})}) for s in states] or None
+    if path == "path3" and str(answers.get("school_id") or "").isdigit() and _program_list(answers) is not None:
+        return [("compare_programs", {"school_id": int(answers["school_id"])})]
+    if path == "path4" and answers.get("career_matches"):
+        return [("compare_careers", {})]
+    if path == "path5" and answers.get("career_programs"):
+        return [("rank_schools_for_career", {})]
+    return None
+
+
 def _tools_for(intake_answers: dict | None, first_turn: bool) -> list[dict]:
-    """Tools the model may call. The first path3 turn, with confirmed programs,
-    needs only compare_programs; with other tools on offer, the model went
-    looking for programs that have no earnings data. The first path4 turn, with
-    confirmed careers, needs only compare_careers; the model otherwise
-    re-searched each career and dragged in neighbouring occupations.
-    The first path5 turn needs only rank_schools_for_career: everything it
-    ranks on comes from intake. Follow-ups get every tool."""
+    """Tools the model may call. The first path3 turn, with confirmed programs
+    but no school_id for code to gather with (_planned_calls), needs only
+    compare_programs; with other tools on offer, the model went looking for
+    programs that have no earnings data. Follow-ups get every tool."""
     answers = intake_answers or {}
     if first_turn and answers.get("path_type") == "path3" and _program_list(answers) is not None:
         return [t for t in OPENAI_TOOLS if t["function"]["name"] == "compare_programs"]
-    if first_turn and answers.get("path_type") == "path4" and answers.get("career_matches"):
-        return [t for t in OPENAI_TOOLS if t["function"]["name"] == "compare_careers"]
-    if first_turn and answers.get("path_type") == "path5" and answers.get("career_programs"):
-        return [t for t in OPENAI_TOOLS if t["function"]["name"] == "rank_schools_for_career"]
     return OPENAI_TOOLS
 
 
@@ -543,7 +585,9 @@ async def run_agent_stream(
       {"event": "complete", "response": "...", "report_html": "...", "conversation_history": [...]}
     """
     messages = list(conversation_history) if conversation_history else []
-    tools = _tools_for(intake_answers, first_turn=not messages)
+    first_turn = not messages
+    tools = _tools_for(intake_answers, first_turn=first_turn)
+    planned = _planned_calls(intake_answers) if first_turn else None
     messages.append({"role": "user", "content": user_message})
     messages = _trim_history(messages)
     data_blocks: list[dict] = []
@@ -565,7 +609,56 @@ async def run_agent_stream(
     tool_errors: list[dict] = []
     dispatch = _dispatch_for(await resolve_user_numbers(intake_answers), intake_answers)
 
-    for iteration in range(MAX_TOOL_ITERATIONS):
+    async def run_tools(calls: list[tuple[str, str, str]]):
+        """Runs (id, name, JSON arguments) tool calls, appending each result to
+        messages and data_blocks; yields progress."""
+        nonlocal tools_total, gather_steps
+        for tool_id, tool_name, arguments in calls:
+            progress_message = _TOOL_PROGRESS.get(tool_name, f"Running {tool_name}…")
+            yield gathering(progress_message)
+
+            func = dispatch.get(tool_name)
+            if not func:
+                messages.append({"role": "tool", "tool_call_id": tool_id, "content": f"Error: unknown tool '{tool_name}'"})
+                continue
+
+            try:
+                tool_input = json.loads(arguments or "{}")
+                t0 = time.perf_counter()
+                result = await asyncio.to_thread(func, tool_input)
+                tools_total += time.perf_counter() - t0
+                messages.append({"role": "tool", "tool_call_id": tool_id, "content": json.dumps(result, default=_json_default)})
+                if isinstance(result, dict) and "error" in result:
+                    tool_errors.append({"tool": tool_name, "args": tool_input, "error": result["error"],
+                                        **({"no_match": True} if result.get("no_match") else {})})
+                elif isinstance(result, dict) and "options" in result and not result["options"]:
+                    # Results came back, but none has the data a comparison needs.
+                    tool_errors.append({"tool": tool_name, "args": tool_input, "error": "No comparable rows"})
+                else:
+                    data_blocks.append({"type": tool_name, "data": result})
+                gather_steps += 1
+                # Same message, bar advances.
+                yield gathering(progress_message)
+            except Exception as exc:
+                logger.exception("Tool %s failed", tool_name)
+                tool_errors.append({"tool": tool_name, "args": arguments, "error": repr(exc)})
+                send_alert(f"Tool {tool_name} raised", {"args": arguments, "error": repr(exc),
+                                                       "intake_answers": intake_answers})
+                messages.append({"role": "tool", "tool_call_id": tool_id, "content": f"Error executing {tool_name}: {exc}"})
+
+    if planned:
+        # Intake already fixed what to gather, so code makes the calls. They go
+        # into the history as the model's would, so a report retry and the
+        # model on a follow-up see them.
+        calls = [(f"intake_{i}", name, json.dumps(args)) for i, (name, args) in enumerate(planned)]
+        messages.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": i, "type": "function", "function": {"name": n, "arguments": a}} for i, n, a in calls]})
+        async for event in run_tools(calls):
+            yield event
+        text_response = PLANNED_REPLY
+        messages.append({"role": "assistant", "content": text_response})
+
+    for iteration in range(0 if planned else MAX_TOOL_ITERATIONS):
         agent_calls = iteration + 1
         try:
             yield gathering("Understanding your question…" if iteration == 0 else "Reviewing what I found…")
@@ -589,43 +682,8 @@ async def run_agent_stream(
             # must be sent back with tool calls (Gemini's thought signatures,
             # other providers' reasoning fields), and rebuilding it drops them.
             messages.append(message.model_dump(exclude_none=True))
-
-            for call in message.tool_calls:
-                tool_name = call.function.name
-                tool_id = call.id
-
-                progress_message = _TOOL_PROGRESS.get(tool_name, f"Running {tool_name}…")
-                yield gathering(progress_message)
-
-                func = dispatch.get(tool_name)
-                if not func:
-                    messages.append({"role": "tool", "tool_call_id": tool_id, "content": f"Error: unknown tool '{tool_name}'"})
-                    continue
-
-                try:
-                    tool_input = json.loads(call.function.arguments or "{}")
-                    t0 = time.perf_counter()
-                    result = await asyncio.to_thread(func, tool_input)
-                    tools_total += time.perf_counter() - t0
-                    messages.append({"role": "tool", "tool_call_id": tool_id, "content": json.dumps(result, default=_json_default)})
-                    if isinstance(result, dict) and "error" in result:
-                        tool_errors.append({"tool": tool_name, "args": tool_input, "error": result["error"],
-                                            **({"no_match": True} if result.get("no_match") else {})})
-                    elif isinstance(result, dict) and "options" in result and not result["options"]:
-                        # Results came back, but none has the data a comparison needs.
-                        tool_errors.append({"tool": tool_name, "args": tool_input, "error": "No comparable rows"})
-                    else:
-                        data_blocks.append({"type": tool_name, "data": result})
-                    gather_steps += 1
-                    # Same message, bar advances.
-                    yield gathering(progress_message)
-                except Exception as exc:
-                    logger.exception("Tool %s failed", tool_name)
-                    tool_errors.append({"tool": tool_name, "args": call.function.arguments, "error": repr(exc)})
-                    send_alert(f"Tool {tool_name} raised", {"args": call.function.arguments, "error": repr(exc),
-                                                           "intake_answers": intake_answers})
-                    messages.append({"role": "tool", "tool_call_id": tool_id, "content": f"Error executing {tool_name}: {exc}"})
-
+            async for event in run_tools([(c.id, c.function.name, c.function.arguments) for c in message.tool_calls]):
+                yield event
         else:
             text_response = message.content or ""
             messages.append(message.model_dump(exclude_none=True))
@@ -641,6 +699,11 @@ async def run_agent_stream(
             "conversation_history": messages,
         }
         return
+
+    if data_blocks and not first_turn:
+        # A follow-up adds to what earlier turns gathered (another school, say),
+        # so its report compares everything gathered so far.
+        data_blocks = _extract_data_blocks(messages)
 
     if intake_answers:
         required, expected = check_rows(intake_answers, data_blocks)

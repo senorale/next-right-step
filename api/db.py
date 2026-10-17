@@ -520,6 +520,19 @@ def search_schools(
     return {"results": [_school_result(s) for s in _prefer_exact(schools, name)], "source": "scorecard"}
 
 
+def schools_by_ids(school_ids: list[int]) -> dict:
+    """The schools with these College Scorecard IDs, in the order given (path2:
+    the ones the user picked in intake, already stored by its search)."""
+    ids = [int(i) for i in school_ids]
+    with _connect_with_retry() as conn:
+        rows = conn.execute(text('SELECT * FROM "School" WHERE school_id = ANY(:ids)'), {"ids": ids})
+        by_id = {r._mapping["school_id"]: dict(r._mapping) for r in rows}
+    missing = [i for i in ids if i not in by_id]
+    if len(missing) == len(ids):
+        return {"error": f"No schools found for school_ids {ids}", "results": []}
+    return {"results": [_school_result(by_id[i]) for i in ids if i in by_id], "source": "db"}
+
+
 _PROGRAM_PREFIX = "latest.programs.cip_4_digit"
 _PROGRAM_FIELDS = ",".join([
     "id",

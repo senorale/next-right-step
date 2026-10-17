@@ -124,10 +124,10 @@ def check(content: dict, fixed: list[dict] | None, data_blocks: list[dict], inta
             for k, v in expect["user_numbers"].items() if float(v) not in present
         ]
         results["official_data_present"] = [] if any(
-            r.get("soc_code") == expect["occupation_code"]
-            for b in data_blocks if b.get("type") == "search_occupations" and isinstance(b.get("data"), dict)
-            for r in b["data"].get("results", [])
-        ) else [f"no search result for {expect['occupation_code']} to compare against"]
+            r.get("option_id") == f"occ:{expect['occupation_code']}"
+            for b in data_blocks if b.get("type") == "compare_education_paths" and isinstance(b.get("data"), dict)
+            for r in b["data"].get("options", [])
+        ) else [f"no official row for {expect['occupation_code']} to compare against"]
 
     return {name: {"pass": not hits, "hits": hits} for name, hits in results.items()}
 

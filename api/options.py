@@ -65,6 +65,16 @@ RANK_ORDER = {
     "Retention rate": ("retention_rate", True),
     "Loan repayment rate": ("loan_repayment_rate_3yr", True),
 }
+# rank_by -> search_schools sort_by, for gathering path2 schools by location.
+RANK_SORT = {
+    "Earnings after graduation": "earnings",
+    "Net price / cost": "net_price",
+    "Graduation rate": "graduation_rate",
+    "Debt at graduation": "median_debt",
+    "Admission rate": "admission_rate",
+    "Retention rate": "retention_rate",
+    "Loan repayment rate": "loan_repayment",
+}
 # path3 program_priority -> (row field or metric, highest first). "Job demand"
 # (O*NET bright outlook) has no local data, so it isn't ranked in code.
 PRIORITY_ORDER = {
@@ -98,9 +108,15 @@ def rank_order(intake_answers: dict | None) -> tuple[str, bool, str | None] | No
     if answers.get("path_type") == "path3":
         order = PRIORITY_ORDER.get(answers.get("program_priority"))
         return (*order, "program:") if order else None
-    chosen = _choices(answers)
-    rank = answers.get("rank_by") or (chosen[0] if len(chosen) == 1 else None)
+    rank = rank_choice(answers)
     return (*RANK_ORDER[rank], None) if rank in RANK_ORDER else None
+
+
+def rank_choice(intake_answers: dict | None) -> str | None:
+    """The user's ranking: rank_by, or the only metric they chose."""
+    answers = intake_answers or {}
+    chosen = _choices(answers)
+    return answers.get("rank_by") or (chosen[0] if len(chosen) == 1 else None)
 
 
 def rank_rows(options: list[dict], intake_answers: dict | None) -> list[dict]:
@@ -530,6 +546,7 @@ def with_rows(tool_name: str, args: dict, result):
     builders = {
         "search_occupations": lambda: occupation_rows(result),
         "search_schools": lambda: school_rows(result, args.get("degree_type", "bachelor")),
+        "get_schools": lambda: school_rows(result, "bachelor"),
         "get_school_programs": lambda: program_rows(result),
     }
     if tool_name in builders:
@@ -558,6 +575,19 @@ def candidate_rows(intake_answers: dict | None, data_blocks: list[dict]) -> list
     if len(rows) > MAX_CANDIDATES:
         logger.warning("Dropping %d candidate rows over MAX_CANDIDATES", len(rows) - MAX_CANDIDATES)
     return rows[:MAX_CANDIDATES]
+
+
+def report_rows(intake_answers: dict | None, rows: list[dict]) -> list[dict]:
+    """The rows the report shows, chosen by the path's rules rather than the
+    report model, which then sees only these and can't cite a row the report
+    leaves out. path2 shows every school gathered (the ones picked, plus any a
+    follow-up added), with the bachelor's median as the reference; the high
+    school baseline stays out (it is the payoff baseline, which the payoff
+    note states). Other paths show every row."""
+    if (intake_answers or {}).get("path_type") != "path2":
+        return rows
+    return ([r for r in rows if r["option_id"].startswith("school:")]
+            + [r for r in rows if r["option_id"] == "baseline:bachelors"])
 
 
 def _parse_list(value: str | None) -> list | None:
@@ -625,18 +655,23 @@ def _whole_numbers(row: dict) -> dict:
     return {k: int(v) if isinstance(v, float) and v.is_integer() else v for k, v in row.items()}
 
 
-def pairwise_gaps(rows: list[dict]) -> list[dict]:
+def pairwise_gaps(rows: list[dict], top: int | None = None, metrics_only: bool = False, keep=None) -> list[dict]:
     """Differences between every pair of rows, each naming the higher option
     instead of carrying a sign: models misread "a minus b" (a negative gap
-    became "earns less" for the higher earner)."""
+    became "earns less" for the higher earner). top: only pairs with one of
+    the first top rows. metrics_only: skip salary, debt, and years, for rows
+    whose metrics already hold them. keep(a, b): only pairs it accepts."""
     gaps = []
-    for i, a in enumerate(rows):
+    for i, a in enumerate(rows if top is None else rows[:top]):
         for b in rows[i + 1:]:
+            if keep and not keep(a, b):
+                continue
             gap = {"options": [a["option_id"], b["option_id"]]}
             # Metrics both rows have (school vs school, program vs program).
             ma, mb = a.get("metrics") or {}, b.get("metrics") or {}
             shared = [(k, k) for k in ma if k in mb and not isinstance(ma[k], bool)]
-            for field, label in (("expected_salary", "salary"), ("debt", "debt"), ("years_in_school", "years"), *shared):
+            fields = [] if metrics_only else [("expected_salary", "salary"), ("debt", "debt"), ("years_in_school", "years")]
+            for field, label in (*fields, *shared):
                 va = a.get(field) if field in a else ma.get(field)
                 vb = b.get(field) if field in b else mb.get(field)
                 if va is None or vb is None or va == vb:
@@ -648,3 +683,48 @@ def pairwise_gaps(rows: list[dict]) -> list[dict]:
                                               else round(diff, 2) if label in RATIO_METRICS else round(diff))
             gaps.append(gap)
     return gaps
+
+
+def path3_gaps(rows: list[dict]) -> list[dict]:
+    """path3: gaps between programs, and between each program and the
+    occupations it leads to: the comparisons the report makes. Occupation
+    pairs only gave the model wrong figures to pick from."""
+    def keep(a: dict, b: dict) -> bool:
+        if a["option_id"].startswith("program:") and b["option_id"].startswith("program:"):
+            return True
+        return b["option_id"] in (a.get("leads_to") or []) or a["option_id"] in (b.get("leads_to") or [])
+    return pairwise_gaps(rows, keep=keep)
+
+
+PATH5_TOP = 3  # path5 report compares these schools with each other and the national median
+# national_spread key -> program row metric.
+SPREAD_METRICS = {
+    "earnings_1yr": "earnings_1yr_after_graduation",
+    "earnings_4yr": "earnings_4yr_after_graduation",
+    "median_debt": "median_debt",
+}
+
+
+def path5_gaps(rows: list[dict], spread: dict) -> tuple[list[dict], list[dict]]:
+    """path5: gaps between the top schools and every other school, and gaps
+    from the national median: each top school's, and the lowest and highest
+    school's nationally. Salary and debt repeat the 4-yr pay and median debt
+    metrics, so only the metrics are compared."""
+    pairs = pairwise_gaps(rows, top=PATH5_TOP, metrics_only=True)
+    median_gaps = []
+    for key, metric in SPREAD_METRICS.items():
+        st = spread.get(key)
+        if not st or st.get("median") is None:
+            continue
+        median = st["median"]
+        for r in rows[:PATH5_TOP]:
+            value = (r.get("metrics") or {}).get(metric)
+            if value is None or value == median:
+                continue
+            median_gaps.append({"option": r["option_id"], "metric": metric, "national_median": median,
+                                "higher": r["option_id"] if value > median else "national median",
+                                "difference": round(abs(value - median))})
+        median_gaps.append({"metric": metric, "national_median": median,
+                            "lowest_school_below_median": round(median - st["min"]),
+                            "highest_school_above_median": round(st["max"] - median)})
+    return pairs, median_gaps
