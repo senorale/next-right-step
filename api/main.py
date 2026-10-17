@@ -11,10 +11,11 @@ import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from alerts import send_alert
+from guard import rate_limit
 from intake_validation import validate_intake
 from agent import run_agent_stream, generate_report, _extract_data_blocks, _json_default
 
@@ -44,13 +45,13 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/validate-intake")
+@app.post("/validate-intake", dependencies=[Depends(rate_limit("intake"))])
 async def validate_intake_step(req: ValidateIntakeRequest):
     """Checks one free-text intake answer when the user submits the step."""
     return await validate_intake(req.key, req.value, req.answers)
 
 
-@app.post("/retry-report")
+@app.post("/retry-report", dependencies=[Depends(rate_limit("report"))])
 async def retry_report(req: ReportRetryRequest):
     logger = logging.getLogger(__name__)
     data_blocks = _extract_data_blocks(req.conversation_history)
@@ -66,7 +67,7 @@ async def retry_report(req: ReportRetryRequest):
         return {"summary": "", "html": "", "error": str(exc)}
 
 
-@app.post("/chat")
+@app.post("/chat", dependencies=[Depends(rate_limit("report"))])
 async def chat(req: ChatRequest):
     async def event_stream():
         async for event in run_agent_stream(req.message, req.conversation_history, req.intake_answers):

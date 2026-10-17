@@ -1,25 +1,13 @@
 export const dynamic = 'force-dynamic'
 
 import { NextRequest, NextResponse } from 'next/server'
-
-const AGENT_API_URL = process.env.AGENT_API_URL || 'http://localhost:8000'
+import { agentError, postToAgent } from '@/lib/agent-api'
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json()
+    const res = await postToAgent(req, '/retry-report', await req.json())
 
-    const res = await fetch(`${AGENT_API_URL}/retry-report`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: 'Agent API error' },
-        { status: res.status }
-      )
-    }
+    if (!res.ok) return agentError(res)
 
     return NextResponse.json(await res.json())
   } catch {
