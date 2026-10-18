@@ -759,7 +759,21 @@ async def run_agent_stream(
         }
         return
 
-    if data_blocks and not first_turn:
+    if not first_turn and not data_blocks:
+        # A follow-up the model answered from what earlier turns gathered (a
+        # question about the report): its reply is the answer, with no new report.
+        logger.info("Follow-up answered without new data; no report")
+        yield {
+            "event": "complete",
+            "response": text_response,
+            "report_html": "",
+            "report_status": "skipped",
+            "tool_errors": tool_errors,
+            "conversation_history": messages,
+        }
+        return
+
+    if not first_turn:
         # A follow-up adds to what earlier turns gathered (another school, say),
         # so its report compares everything gathered so far.
         data_blocks = _extract_data_blocks(messages)
