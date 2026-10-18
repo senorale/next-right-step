@@ -1,0 +1,11 @@
+{"id": "question-grad-rate", "base": "path2-named-schools", "follow_up": "Which of these has the best graduation rate?", "expect": {"status": ["skipped"], "no_tools": true, "answer_figures_in_data": true, "answer_mentions": ["Georgia"]}}
+{"id": "question-not-in-data", "base": "path2-named-schools", "follow_up": "What's the average SAT score at each of these schools?", "expect": {"status": ["skipped"], "no_tools": true, "answer_figures_in_data": true}}
+{"id": "question-out-of-scope", "base": "path4-three-careers", "follow_up": "Should I take out private loans to pay for pharmacy school?", "expect": {"status": ["skipped"], "no_tools": true, "answer_figures_in_data": true}}
+{"id": "question-salary", "base": "path4-three-careers", "follow_up": "How much more do pharmacists make than registered nurses?", "expect": {"status": ["skipped"], "no_tools": true, "answer_figures_in_data": true, "answer_mentions": ["pharmacist"]}}
+{"id": "add-school", "base": "path2-named-schools", "follow_up": "Add Duke University too.", "expect": {"status": ["success"], "rows_include": ["school:198419", "school:134130", "school:139755", "school:193900"]}}
+{"id": "add-career", "base": "path4-three-careers", "follow_up": "Can you add electricians to the comparison?", "expect": {"status": ["success"], "rows_include": ["occ:47-2111", "occ:29-1141", "occ:29-1051", "occ:15-1252"]}}
+{"id": "fallback-path1", "base": "path1-lawyer-medians", "strip": ["occupation_code", "occupation_title"], "expect": {"status": ["success"], "rows_include": ["occ:23-1011", "baseline:hs", "baseline:bachelors"]}}
+{"id": "fallback-path2", "base": "path2-named-schools", "strip": ["school_picks"], "expect": {"status": ["success"], "rows_include": ["school:134130", "school:139755", "school:193900"]}}
+{"id": "fallback-path3", "base": "path3-cs-nursing", "strip": ["program_list"], "expect": {"status": ["success"], "row_names_include": ["comput", "nurs"]}}
+{"id": "fallback-path4", "base": "path4-three-careers", "strip": ["career_matches"], "expect": {"status": ["success"], "rows_include": ["occ:29-1141", "occ:29-1051", "occ:15-1252"]}}
+{"id": "fallback-path5", "base": "path5-lawyer-national", "strip": ["career_programs", "target_fields", "target_level"], "expect": {"status": ["error", "skipped", "success"]}}

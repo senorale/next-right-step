@@ -35,17 +35,13 @@ DISCLAIMER = (
     "AI analysis may contain errors; verify figures before making decisions. Generated {today}."
 )
 
-REPORT_PROMPT = """You write the text of a college and career report. Input: the user's intake answers (path_type says their question), option rows built by code, and the gaps between every pair of rows. Code picked the rows, and the report shows every one, with charts, the financial table with payoff timelines, and source notes; you write the words.
+REPORT_PROMPT = """Here you write the text of the report. Input: the person's intake answers (path_type says their question), option rows built by code, and the gaps between the rows the report compares. Code picked the rows, and the report shows every one, with charts, tables, and source notes; you write the words.
 
 - headline: the main takeaway in 1-2 sentences; it is also the chat reply. Never describe the report.
 - sections: 2-3, most important first. The reader already sees every row in the table, so each bullet compares two or more options ("Lawyers earn $68,124 more in median salary than bachelor's holders"); never one bullet per option restating its numbers. what_it_means: one concrete takeaway. table_metrics: row metrics worth a table here; only the ones the user chose, if they chose any.
 - limitations: 1-2 caveats specific to this comparison.
 
-Numbers:
-- Use only numbers from the rows, gaps, and (path5) career and median_gaps, copied exactly; never compute one. Each gap names the option with the higher salary, debt, or years. Write dollars as $61,690.
-- Write for the user: never say "row", "gap", or field names. National figures are medians: say "median salary", "median debt". Rows marked user_numbers hold the user's own figures: say "your".
-- Occupation salaries are BLS medians for the whole occupation; school and program salaries are College Scorecard earnings of its graduates.
-- Years of school are typical: say "typically".
+Numbers come from the rows, gaps, and (path5) career and median_gaps. Each gap names the option with the higher salary, debt, or years. Write dollars as $61,690. Rows marked user_numbers hold the person's own figures: say "your". Occupation salaries are BLS medians for the whole occupation; school and program salaries are College Scorecard earnings of its graduates.
 
 Per path:
 - path1: college vs a trade vs working now. The headline states figures: with a user_numbers row, the user's salary and debt against the national median; otherwise whether the chosen occupation needs graduate school, its total years of school, median salary, and median debt, and, if it does, its years beyond a bachelor's and its salary and debt gaps against the bachelor's row.

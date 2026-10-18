@@ -113,7 +113,7 @@ def summarize(runs: list[dict]) -> dict:
     return {
         "runs": len(runs),
         "prompt_chars": {
-            "agent_system": len(agent.SYSTEM_PROMPT),
+            "agent_system": len(agent.GATHER_PROMPT),
             "agent_tools": len(json.dumps(agent.TOOLS)),
             "report_system": len(report.REPORT_PROMPT),
         },

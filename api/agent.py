@@ -33,6 +33,7 @@ from career_cost import CASHIER_CODE, ELECTRICIAN_CODE, path1_options
 from options import (RANK_SORT, allowed_metrics, candidate_rows, check_rows, pairwise_gaps, path3_options, path4_options,
                      path3_gaps, path5_gaps, path5_options, rank_choice, report_rows, with_rows)
 from user_numbers import extract_user_numbers
+from prompts import system_message
 from report import REPORT_PROMPT, render_report, report_schema
 from report_checks import number_problems, report_facts, sentence_ok, split_sentences
 
@@ -321,16 +322,16 @@ def _dispatch_for(user_numbers: dict, intake_answers: dict | None = None) -> dic
     return {name: (lambda args, name=name, func=func: with_rows(name, args, func(args))) for name, func in tools.items()}
 
 
-SYSTEM_PROMPT = """You gather data for a college and career report; a separate step writes it. Tool results include "options": rows the report can compare. Gather the ones this person's question needs. Call independent tools together; if a search finds nothing, try other keywords. When done, reply with one short sentence.
+GATHER_PROMPT = """Here you fetch data for the report; a separate step writes it.
 
-The user confirmed the occupations (with SOC codes), schools (with school_id), and programs in their intake. Use exactly those: search an occupation by its confirmed title and take the result with that SOC code, and pass a confirmed school_id straight to the tool that takes it.
+The first message states the person's question and the occupations (with SOC codes), schools (with school_id), and programs they confirmed. Use exactly those: search an occupation by its confirmed title and take the match with that SOC code. Earlier tool results are what was already gathered; the latest assistant message is the report headline they saw.
 
-Questions by intake path_type:
-- path1: college vs a trade vs working now, for their occupation (use occupation_code from intake when present).
-- path2: how the schools they named, or schools in their location, compare.
-- path3: call compare_programs with the school_id from intake; it returns the programs they confirmed and the occupations each leads to. Nothing else is needed.
-- path4: call compare_careers; it returns the careers they confirmed and their current job if included. Nothing else is needed.
-- path5: call rank_schools_for_career; it returns the top schools for their target career on the program, location, and limits they chose. Nothing else is needed.
+Each turn, do one:
+- Nothing gathered yet, or they ask to add a school, career, or program: call the tools that fetch it (independent ones together; if a search finds nothing, try other keywords), then reply in one short sentence.
+- A question about what was gathered: answer in 1-3 sentences. If the data doesn't answer it, say so.
+- Anything else: say in one sentence what this data can and can't tell them.
+
+compare_programs, compare_careers, and rank_schools_for_career rebuild what was confirmed at the start; calling them again adds nothing.
 """
 
 
@@ -437,7 +438,7 @@ async def _report_call(content: dict, show_progress: bool):
         model=REPORT_MODEL,
         max_tokens=REPORT_SPEC_MAX_TOKENS,
         messages=[
-            {"role": "system", "content": REPORT_PROMPT},
+            system_message(REPORT_PROMPT),
             {"role": "user", "content": json.dumps(content, default=_json_default)},
         ],
         # Numbers come from code, so variety only adds risk (e.g. garbled figures).
@@ -612,7 +613,7 @@ async def _call_model(messages: list[dict], tools: list[dict] = OPENAI_TOOLS):
             return await client.chat.completions.create(
                 model=MODEL,
                 max_tokens=1024,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}, *messages],
+                messages=[system_message(GATHER_PROMPT), *messages],
                 tools=tools,
             )
         except (openai.APIConnectionError, openai.RateLimitError) as exc:
@@ -824,6 +825,9 @@ async def run_agent_stream(
             report_total = time.perf_counter() - t0
             text_response = report.get("summary", text_response)
             report_html = report.get("html", "")
+            if messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
+                # Follow-ups see the headline the person read, not the gathering reply.
+                messages[-1] = {**messages[-1], "content": text_response}
             if report_html:
                 report_status = "success"
                 logger.info("Report OK: %d bytes HTML", len(report_html))
